@@ -175,7 +175,7 @@ static int bgp_reuse_timer(struct thread *t)
 {
 	struct bgp_damp_config *bdc = THREAD_ARG(t);
 	struct bgp_damp_info *bdi;
-	struct reuselist plist;
+	struct reuselist *plist;
 	struct bgp *bgp;
 	time_t t_now, t_diff;
 
@@ -184,11 +184,9 @@ static int bgp_reuse_timer(struct thread *t)
 
 	t_now = bgp_clock();
 
-	/* 1.  save a pointer to the current queue head and zero the list head
-	 * list head entry. */
+	/* 1.  save a pointer to the current queue head. */
 	assert(bdc->reuse_offset < bdc->reuse_list_size);
-	plist = bdc->reuse_list[bdc->reuse_offset];
-	LIST_INIT(&bdc->reuse_list[bdc->reuse_offset]);
+	plist = &bdc->reuse_list[bdc->reuse_offset];
 
 	/* 2.  set offset = modulo reuse-list-size ( offset + 1 ), thereby
 	   rotating the circular queue of list-heads.  */
@@ -196,7 +194,7 @@ static int bgp_reuse_timer(struct thread *t)
 	assert(bdc->reuse_offset < bdc->reuse_list_size);
 
 	/* 3. if ( the saved list head pointer is non-empty ) */
-	while ((bdi = LIST_FIRST(&plist)) != NULL) {
+	while ((bdi = LIST_FIRST(plist)) != NULL) {
 		bgp = bdi->path->peer->bgp;
 
 		/* Set t-diff = t-now - t-updated.  */
@@ -230,19 +228,19 @@ static int bgp_reuse_timer(struct thread *t)
 				bgp_damp_info_free(bdi, 1);
 			} else {
 				bdi->index = BGP_DAMP_NO_REUSE_LIST_INDEX;
-				bgp_reuselist_switch(&plist, bdi,
+				bgp_reuselist_switch(plist, bdi,
 						     &bdc->no_reuse_list);
 			}
 		} else {
 			/* Re-insert into another list (See RFC2439 Section
 			 * 4.8.6).  */
 			bdi->index = bgp_reuse_index(bdi->penalty, bdc);
-			bgp_reuselist_switch(&plist, bdi,
+			bgp_reuselist_switch(plist, bdi,
 					     &bdc->reuse_list[bdi->index]);
 		}
 	}
 
-	assert(LIST_EMPTY(&plist));
+	assert(LIST_EMPTY(plist));
 
 	return 0;
 }
