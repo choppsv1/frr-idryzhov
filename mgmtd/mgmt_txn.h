@@ -9,7 +9,6 @@
 #ifndef _FRR_MGMTD_TXN_H_
 #define _FRR_MGMTD_TXN_H_
 
-#include "lib/mgmt_msg_native.h"
 #include "mgmtd/mgmt_be_adapter.h"
 #include "mgmtd/mgmt.h"
 #include "mgmtd/mgmt_ds.h"
@@ -249,33 +248,13 @@ mgmt_txn_notify_be_cfg_apply_reply(uint64_t txn_id, bool success,
 				       char *error_if_any,
 				       struct mgmt_be_client_adapter *adapter);
 
-
 /**
  * Process a reply from a backend client to our get-tree request
- *
- * Args:
- *	adapter: The adapter that received the result.
- *	txn_id: The transaction for this get-tree request.
- *	req_id: The request ID for this transaction.
- *	error: the integer error value (negative)
- *	errstr: the string description of the error.
  */
-int mgmt_txn_notify_error(struct mgmt_be_client_adapter *adapter,
-			  uint64_t txn_id, uint64_t req_id, int error,
-			  const char *errstr);
-
-/**
- * Process a reply from a backend client to our get-tree request
- *
- * Args:
- *	adapter: The adapter that received the result.
- *      data_msg: The message from the backend.
- *	msg_len: Total length of the message.
- */
-
-extern int mgmt_txn_notify_tree_data_reply(struct mgmt_be_client_adapter *adapter,
-					   struct mgmt_msg_tree_data *data_msg,
-					   size_t msg_len);
+extern int mgmt_txn_notify_get_data_reply(uint64_t txn_id, uint64_t req_id,
+					  bool success, Mgmtd__YangDataFormat format,
+					  void *data, const char *error,
+					  struct mgmt_be_client_adapter *adapter);
 
 /*
  * Dump transaction status to vty.

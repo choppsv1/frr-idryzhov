@@ -12,7 +12,6 @@
 #include "jhash.h"
 #include "libfrr.h"
 #include "mgmt_msg.h"
-#include "mgmt_msg_native.h"
 #include "mgmtd/mgmt.h"
 #include "mgmtd/mgmt_memory.h"
 #include "mgmtd/mgmt_txn.h"
@@ -2362,12 +2361,11 @@ int mgmt_txn_send_get_tree_oper(uint64_t txn_id, uint64_t req_id,
 				uint64_t clients, LYD_FORMAT result_type,
 				const char *xpath)
 {
-	struct mgmt_msg_get_tree *msg;
+	struct mgmt_be_client_adapter *adapter;
 	struct mgmt_txn_ctx *txn;
 	struct mgmt_txn_req *txn_req;
 	struct txn_req_get_tree *get_tree;
 	enum mgmt_be_client_id id;
-	size_t mlen = sizeof(*msg) + strlen(xpath) + 1;
 	int ret;
 
 	txn = mgmt_txn_id2ctx(txn_id);
@@ -2380,31 +2378,27 @@ int mgmt_txn_send_get_tree_oper(uint64_t txn_id, uint64_t req_id,
 	get_tree->result_type = result_type;
 	get_tree->xpath = XSTRDUP(MTYPE_MGMTD_XPATH, xpath);
 
-	msg = XCALLOC(MTYPE_MSG_NATIVE_MSG, mlen);
-	msg->txn_id = txn_id;
-	msg->req_id = req_id;
-	msg->code = MGMT_MSG_CODE_GET_TREE;
-	/* Always operate with the binary format in the backend */
-	msg->result_type = LYD_LYB;
-	strlcpy(msg->xpath, xpath, mlen - sizeof(*msg));
-
 	assert(clients);
 	FOREACH_BE_CLIENT_BITS (id, clients) {
-		ret = mgmt_be_send_native(id, msg, mlen);
+		adapter = mgmt_be_get_adapter_by_id(id);
+		if (!adapter)
+			continue;
+
+		ret = mgmt_be_send_get_req(adapter, txn_id, req_id,
+					   lyd_to_mgmt_format(LYD_LYB),
+					   xpath);
 		if (ret) {
-			MGMTD_TXN_ERR("Could not send get-tree message to backend client %s",
+			MGMTD_TXN_ERR("Could not send GET request to backend client %s",
 				      mgmt_be_client_id2name(id));
 			continue;
 		}
 
-		MGMTD_TXN_DBG("Sent get-tree req to backend client %s",
+		MGMTD_TXN_DBG("Sent GET request to backend client %s",
 			      mgmt_be_client_id2name(id));
 
 		/* record that we sent the request to the client */
 		get_tree->sent_clients |= (1u << id);
 	}
-
-	XFREE(MTYPE_MSG_NATIVE_MSG, msg);
 
 	/* Start timeout timer - pulled out of register event code so we can
 	 * pass a different arg
@@ -2416,72 +2410,13 @@ int mgmt_txn_send_get_tree_oper(uint64_t txn_id, uint64_t req_id,
 }
 
 /*
- * Error reply from the backend client.
- */
-int mgmt_txn_notify_error(struct mgmt_be_client_adapter *adapter,
-			  uint64_t txn_id, uint64_t req_id, int error,
-			  const char *errstr)
-{
-	enum mgmt_be_client_id id = adapter->id;
-	struct mgmt_txn_ctx *txn = mgmt_txn_id2ctx(txn_id);
-	struct txn_req_get_tree *get_tree;
-	struct mgmt_txn_req *txn_req;
-
-	if (!txn) {
-		MGMTD_TXN_ERR("Error reply from %s cannot find txn-id %" PRIu64,
-			      adapter->name, txn_id);
-		return -1;
-	}
-
-	/* Find the request. */
-	FOREACH_TXN_REQ_IN_LIST (&txn->get_tree_reqs, txn_req)
-		if (txn_req->req_id == req_id)
-			break;
-	if (!txn_req) {
-		MGMTD_TXN_ERR("Error reply from %s for txn-id %" PRIu64
-			      " cannot find req_id %" PRIu64,
-			      adapter->name, txn_id, req_id);
-		return -1;
-	}
-
-	MGMTD_TXN_ERR("Error reply from %s for txn-id %" PRIu64
-		      " req_id %" PRIu64,
-		      adapter->name, txn_id, req_id);
-
-	switch (txn_req->req_event) {
-	case MGMTD_TXN_PROC_GETTREE:
-		get_tree = txn_req->req.get_tree;
-		get_tree->recv_clients |= (1u << id);
-		get_tree->partial_error = error;
-
-		/* check if done yet */
-		if (get_tree->recv_clients != get_tree->sent_clients)
-			return 0;
-		return txn_get_tree_data_done(txn, txn_req);
-
-	/* non-native message events */
-	case MGMTD_TXN_PROC_SETCFG:
-	case MGMTD_TXN_PROC_COMMITCFG:
-	case MGMTD_TXN_PROC_GETCFG:
-	case MGMTD_TXN_COMMITCFG_TIMEOUT:
-	case MGMTD_TXN_GETTREE_TIMEOUT:
-	case MGMTD_TXN_CLEANUP:
-	default:
-		assert(!"non-native req event in native erorr path");
-		return -1;
-	}
-}
-
-/*
  * Get-tree data from the backend client.
  */
-int mgmt_txn_notify_tree_data_reply(struct mgmt_be_client_adapter *adapter,
-				    struct mgmt_msg_tree_data *data_msg,
-				    size_t msg_len)
+int mgmt_txn_notify_get_data_reply(uint64_t txn_id, uint64_t req_id,
+				   bool success, Mgmtd__YangDataFormat format,
+				   void *data, const char *error,
+				   struct mgmt_be_client_adapter *adapter)
 {
-	uint64_t txn_id = data_msg->txn_id;
-	uint64_t req_id = data_msg->req_id;
-
 	enum mgmt_be_client_id id = adapter->id;
 	struct mgmt_txn_ctx *txn = mgmt_txn_id2ctx(txn_id);
 	struct mgmt_txn_req *txn_req;
@@ -2490,7 +2425,7 @@ int mgmt_txn_notify_tree_data_reply(struct mgmt_be_client_adapter *adapter,
 	LY_ERR err;
 
 	if (!txn) {
-		MGMTD_TXN_ERR("GETTREE reply from %s for a missing txn-id %" PRIu64,
+		MGMTD_TXN_ERR("GET reply from %s for a missing txn-id %" PRIu64,
 			      adapter->name, txn_id);
 		return -1;
 	}
@@ -2500,7 +2435,7 @@ int mgmt_txn_notify_tree_data_reply(struct mgmt_be_client_adapter *adapter,
 		if (txn_req->req_id == req_id)
 			break;
 	if (!txn_req) {
-		MGMTD_TXN_ERR("GETTREE reply from %s for txn-id %" PRIu64
+		MGMTD_TXN_ERR("GET reply from %s for txn-id %" PRIu64
 			      " missing req_id %" PRIu64,
 			      adapter->name, txn_id, req_id);
 		return -1;
@@ -2508,17 +2443,22 @@ int mgmt_txn_notify_tree_data_reply(struct mgmt_be_client_adapter *adapter,
 
 	get_tree = txn_req->req.get_tree;
 
+	if (!success) {
+		err = LY_EOTHER;
+		goto err;
+	}
+
 	/* store the result */
-	err = lyd_parse_data_mem(ly_native_ctx, (const char *)data_msg->result,
-				 data_msg->result_type,
+	err = lyd_parse_data_mem(ly_native_ctx, data,
+				 mgmt_to_lyd_format(format),
 				 LYD_PARSE_STRICT | LYD_PARSE_ONLY,
 				 0 /*LYD_VALIDATE_OPERATIONAL*/, &tree);
 	if (err) {
-		MGMTD_TXN_ERR("GETTREE reply from %s for txn-id %" PRIu64
+		MGMTD_TXN_ERR("GET reply from %s for txn-id %" PRIu64
 			      " req_id %" PRIu64
 			      " error parsing result of type %u",
 			      adapter->name, txn_id, req_id,
-			      data_msg->result_type);
+			      format);
 	}
 	if (!err) {
 		/* TODO: we could merge ly_errs here if it's not binary */
@@ -2529,15 +2469,14 @@ int mgmt_txn_notify_tree_data_reply(struct mgmt_be_client_adapter *adapter,
 			err = lyd_merge_siblings(&get_tree->client_results,
 						 tree, LYD_MERGE_DESTRUCT);
 		if (err) {
-			MGMTD_TXN_ERR("GETTREE reply from %s for txn-id %" PRIu64
+			MGMTD_TXN_ERR("GET reply from %s for txn-id %" PRIu64
 				      " req_id %" PRIu64 " error merging result",
 				      adapter->name, txn_id, req_id);
 		}
 	}
+err:
 	if (!get_tree->partial_error)
-		get_tree->partial_error = (data_msg->partial_error
-						   ? data_msg->partial_error
-						   : (int)err);
+		get_tree->partial_error = err;
 
 	get_tree->recv_clients |= (1u << id);
 

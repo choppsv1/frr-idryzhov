@@ -68,6 +68,12 @@ message YangGetDataReq {
   required int64 next_indx = 2;
 }
 
+enum YangDataFormat {
+  JSON = 0;
+  XML = 1;
+  BINARY = 2;
+}
+
 //
 // Backend Interface Messages
 //
@@ -114,9 +120,28 @@ message BeCfgDataApplyReply {
   optional string error_if_any = 3;
 }
 
+message BeOperDataGetReq {
+  required uint64 txn_id = 1;
+  required uint64 req_id = 2;
+  required YangDataFormat format = 3;
+  required string xpath = 4;
+}
+
 message YangDataReply {
   repeated YangData data = 1;
   required int64 next_indx = 2;
+}
+
+message BeOperDataGetReply {
+  required uint64 txn_id = 1;
+  required uint64 req_id = 2;
+  required bool success = 3;
+  required YangDataFormat format = 4;
+  oneof data {
+    string text = 5;
+    bytes binary = 6;
+  }
+  optional string error_if_any = 7;
 }
 
 //
@@ -132,6 +157,8 @@ message BeMessage {
     BeCfgDataCreateReply cfg_data_reply = 7;
     BeCfgDataApplyReq cfg_apply_req = 8;
     BeCfgDataApplyReply cfg_apply_reply = 9;
+    BeOperDataGetReq get_req = 10;
+    BeOperDataGetReply get_reply = 11;
   }
 }
 

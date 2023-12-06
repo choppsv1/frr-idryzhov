@@ -13,7 +13,6 @@
 #include "lib_errors.h"
 #include "mgmt_be_client.h"
 #include "mgmt_msg.h"
-#include "mgmt_msg_native.h"
 #include "mgmt_pb.h"
 #include "network.h"
 #include "northbound.h"
@@ -118,15 +117,6 @@ struct debug mgmt_dbg_be_client = {
 };
 
 struct mgmt_be_client *mgmt_be_client;
-
-static int be_client_send_native_msg(struct mgmt_be_client *client_ctx,
-				     void *msg, size_t len,
-				     bool short_circuit_ok)
-{
-	return msg_conn_send_msg(&client_ctx->client.conn,
-				 MGMT_MSG_VERSION_NATIVE, msg, len, NULL,
-				 short_circuit_ok);
-}
 
 static int mgmt_be_client_send_msg(struct mgmt_be_client *client_ctx,
 				   Mgmtd__BeMessage *be_msg)
@@ -271,41 +261,6 @@ static void mgmt_be_cleanup_all_txns(struct mgmt_be_client *client_ctx)
 	FOREACH_BE_TXN_IN_LIST (client_ctx, txn) {
 		mgmt_be_txn_delete(client_ctx, &txn);
 	}
-}
-
-
-/**
- * Send an error back to MGMTD using native messaging.
- *
- * Args:
- *	client: the BE client.
- *	txn_id: the txn_id this error pertains to.
- *	short_circuit_ok: True if OK to short-circuit the call.
- *	error: An integer error value.
- *	errfmt: An error format string (i.e., printfrr)
- *      ...: args for use by the `errfmt` format string.
- *
- * Return:
- *	the return value from the underlying send message function.
- */
-static int be_client_send_error(struct mgmt_be_client *client, uint64_t txn_id,
-				uint64_t req_id, bool short_circuit_ok,
-				int16_t error, const char *errfmt, ...)
-	PRINTFRR(6, 7);
-
-static int be_client_send_error(struct mgmt_be_client *client, uint64_t txn_id,
-				uint64_t req_id, bool short_circuit_ok,
-				int16_t error, const char *errfmt, ...)
-{
-	va_list ap;
-	int ret;
-
-	va_start(ap, errfmt);
-	ret = vmgmt_msg_native_send_error(&client->client.conn, txn_id, req_id,
-					  short_circuit_ok, error, errfmt, ap);
-	va_end(ap);
-
-	return ret;
 }
 
 static int mgmt_be_send_txn_reply(struct mgmt_be_client *client_ctx,
@@ -705,6 +660,69 @@ failed:
 	return -1;
 }
 
+static int mgmt_be_send_get_reply(struct mgmt_be_client *client_ctx,
+				  uint64_t txn_id, uint64_t req_id,
+				  bool success, Mgmtd__YangDataFormat format,
+				  void *data, size_t len, const char *error_if_any)
+{
+	Mgmtd__BeMessage be_msg;
+	Mgmtd__BeOperDataGetReply get_reply;
+
+	mgmtd__be_oper_data_get_reply__init(&get_reply);
+	get_reply.txn_id = txn_id;
+	get_reply.req_id = req_id;
+	get_reply.success = success;
+	get_reply.format = format;
+	if (success) {
+		if (format == MGMTD__YANG_DATA_FORMAT__BINARY) {
+			get_reply.data_case = MGMTD__BE_OPER_DATA_GET_REPLY__DATA_BINARY;
+			get_reply.binary.data = data;
+			get_reply.binary.len = len;
+		} else {
+			get_reply.data_case = MGMTD__BE_OPER_DATA_GET_REPLY__DATA_TEXT;
+			get_reply.text = data;
+		}
+	}
+	get_reply.error_if_any = (char *)error_if_any;
+
+	mgmtd__be_message__init(&be_msg);
+	be_msg.message_case = MGMTD__BE_MESSAGE__MESSAGE_GET_REPLY;
+	be_msg.get_reply = &get_reply;
+
+	MGMTD_BE_CLIENT_DBG("Sending GET_REPLY txn-id %" PRIu64, txn_id);
+
+	return mgmt_be_client_send_msg(client_ctx, &be_msg);
+}
+
+static void mgmt_be_process_get_req(struct mgmt_be_client *client,
+				    uint64_t txn_id, uint64_t req_id,
+				    Mgmtd__YangDataFormat format,
+				    const char *xpath)
+{
+	struct lyd_node *dnode = NULL;
+	uint8_t *buf = NULL;
+	const char *error = NULL;
+	int ret;
+
+	ret = nb_oper_data_iterate(xpath, NULL, 0, NULL, NULL, &dnode);
+	if (ret == NB_OK) {
+		buf = yang_print_tree(dnode, mgmt_to_lyd_format(format),
+				      (LYD_PRINT_WD_EXPLICIT |
+				       LYD_PRINT_WITHSIBLINGS));
+		if (!buf)
+			error = "Cannot print YANG tree";
+	} else {
+		error = "Cannot fetch operational data";
+	}
+
+	(void)mgmt_be_send_get_reply(client, txn_id, req_id, buf != NULL,
+				     format, buf, darr_len(buf), error);
+
+	darr_free(buf);
+	if (dnode)
+		yang_dnode_free(dnode);
+}
+
 
 static int mgmt_be_client_handle_msg(struct mgmt_be_client *client_ctx,
 				     Mgmtd__BeMessage *be_msg)
@@ -747,11 +765,21 @@ static int mgmt_be_client_handle_msg(struct mgmt_be_client *client_ctx,
 		mgmt_be_process_cfg_apply(
 			client_ctx, (uint64_t)be_msg->cfg_apply_req->txn_id);
 		break;
+	case MGMTD__BE_MESSAGE__MESSAGE_GET_REQ:
+		MGMTD_BE_CLIENT_DBG("Got CFG_REQ txn-id: %" PRIu64,
+				    be_msg->get_req->txn_id);
+		mgmt_be_process_get_req(
+			client_ctx, (uint64_t)be_msg->get_req->txn_id,
+			(uint64_t)be_msg->get_req->req_id,
+			be_msg->get_req->format,
+			be_msg->get_req->xpath);
+		break;
 	/*
 	 * NOTE: The following messages are always sent from Backend
 	 * clients to MGMTd only and/or need not be handled here.
 	 */
 	case MGMTD__BE_MESSAGE__MESSAGE_SUBSCR_REQ:
+	case MGMTD__BE_MESSAGE__MESSAGE_GET_REPLY:
 	case MGMTD__BE_MESSAGE__MESSAGE_TXN_REPLY:
 	case MGMTD__BE_MESSAGE__MESSAGE_CFG_DATA_REPLY:
 	case MGMTD__BE_MESSAGE__MESSAGE_CFG_APPLY_REPLY:
@@ -769,93 +797,6 @@ static int mgmt_be_client_handle_msg(struct mgmt_be_client *client_ctx,
 	return 0;
 }
 
-/*
- * Process the get-tree request on our local oper state
- */
-static void be_client_handle_get_tree(struct mgmt_be_client *client,
-				      uint64_t txn_id, void *msgbuf,
-				      size_t msg_len)
-{
-	struct mgmt_msg_get_tree *get_tree_msg = msgbuf;
-	struct mgmt_msg_tree_data *tree_msg = NULL;
-	struct lyd_node *dnode = NULL;
-	uint8_t *buf = NULL;
-	int ret;
-
-	MGMTD_BE_CLIENT_DBG("Received get-tree request for client %s txn-id %" PRIu64
-			    " req-id %" PRIu64,
-			    client->name, txn_id, get_tree_msg->req_id);
-
-	/* NOTE: removed the translator, if put back merge with northbound_cli
-	 * code
-	 */
-
-	/* Obtain data. */
-	ret = nb_oper_data_iterate(get_tree_msg->xpath, NULL, 0,
-				   NULL, NULL, &dnode);
-	if (ret != NB_OK) {
-fail:
-		if (dnode)
-			yang_dnode_free(dnode);
-		darr_free(buf);
-		be_client_send_error(client, get_tree_msg->txn_id,
-				     get_tree_msg->req_id, false, -EINVAL,
-				     "FE cilent %s txn-id %" PRIu64
-				     " error fetching oper state %d",
-				     client->name, get_tree_msg->txn_id, ret);
-		return;
-	}
-
-	// (void)lyd_validate_all(&dnode, ly_native_ctx, 0, NULL);
-
-	darr_append_nz(buf, offsetof(typeof(*tree_msg), result));
-	tree_msg = (typeof(tree_msg))buf;
-	tree_msg->session_id = get_tree_msg->session_id;
-	tree_msg->req_id = get_tree_msg->req_id;
-	tree_msg->code = MGMT_MSG_CODE_TREE_DATA;
-	tree_msg->result_type = get_tree_msg->result_type;
-	ret = yang_print_tree_append(&buf, dnode, get_tree_msg->result_type,
-				     (LYD_PRINT_WD_EXPLICIT |
-				      LYD_PRINT_WITHSIBLINGS));
-	/* buf may have been reallocated and moved */
-	tree_msg = (typeof(tree_msg))buf;
-
-	if (ret != LY_SUCCESS)
-		goto fail;
-
-	(void)be_client_send_native_msg(client, buf, darr_len(buf), false);
-
-	darr_free(buf);
-	yang_dnode_free(dnode);
-}
-
-/*
- * Handle a native encoded message
- *
- * We don't create transactions with native messaging.
- */
-static void be_client_handle_native_msg(struct mgmt_be_client *client,
-					struct mgmt_msg_header *msg,
-					size_t msg_len)
-{
-	uint64_t txn_id = msg->txn_id;
-
-	switch (msg->code) {
-	case MGMT_MSG_CODE_GET_TREE:
-		be_client_handle_get_tree(client, txn_id, msg, msg_len);
-		break;
-	default:
-		MGMTD_BE_CLIENT_ERR("unknown native message txn-id %" PRIu64
-				    " req-id %" PRIu64 " code %u to client %s",
-				    txn_id, msg->req_id, msg->code,
-				    client->name);
-		be_client_send_error(client, msg->txn_id, msg->req_id, false, -1,
-				     "BE cilent %s recv msg unknown txn-id %" PRIu64,
-				     client->name, txn_id);
-		break;
-	}
-}
-
 static void mgmt_be_client_process_msg(uint8_t version, uint8_t *data,
 				       size_t len, struct msg_conn *conn)
 {
@@ -865,17 +806,6 @@ static void mgmt_be_client_process_msg(uint8_t version, uint8_t *data,
 
 	client = container_of(conn, struct msg_client, conn);
 	client_ctx = container_of(client, struct mgmt_be_client, client);
-
-	if (version == MGMT_MSG_VERSION_NATIVE) {
-		struct mgmt_msg_header *msg = (typeof(msg))data;
-
-		if (len >= sizeof(*msg))
-			be_client_handle_native_msg(client_ctx, msg, len);
-		else
-			MGMTD_BE_CLIENT_ERR("native message to client %s too short %zu",
-					    client_ctx->name, len);
-		return;
-	}
 
 	be_msg = mgmtd__be_message__unpack(NULL, len, data);
 	if (!be_msg) {

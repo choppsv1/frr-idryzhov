@@ -206,6 +206,32 @@ extern int mgmt_be_send_cfgapply_req(struct mgmt_be_client_adapter *adapter,
 				     uint64_t txn_id);
 
 /*
+ * Send config apply request to backend client.
+ *
+ * adapter
+ *    Backend adapter information.
+ *
+ * txn_id
+ *    Unique transaction identifier.
+ *
+ * req_id
+ *    Unique request identifier.
+ *
+ * format
+ *    Output data format.
+ *
+ * xpath
+ *    Requested xpath.
+ *
+ * Returns:
+ *    0 on success, -1 on failure.
+ */
+extern int mgmt_be_send_get_req(struct mgmt_be_client_adapter *adapter,
+				uint64_t txn_id, uint64_t req_id,
+				Mgmtd__YangDataFormat format,
+				const char *xpath);
+
+/*
  * Dump backend adapter status to vty.
  */
 extern void mgmt_be_adapter_status_write(struct vty *vty);
@@ -214,19 +240,6 @@ extern void mgmt_be_adapter_status_write(struct vty *vty);
  * Dump xpath registry for each backend client to vty.
  */
 extern void mgmt_be_xpath_register_write(struct vty *vty);
-
-
-/**
- * Send a native message to a backend client
- *
- * Args:
- *	adapter: the client to send the message to.
- *	msg: the message data.
- *	len: the length of the message data.
- * Return:
- *	Any return value from msg_conn_send_msg.
- */
-extern int mgmt_be_send_native(enum mgmt_be_client_id id, void *data, size_t len);
 
 /**
  * Lookup the clients which are subscribed to a given `xpath`

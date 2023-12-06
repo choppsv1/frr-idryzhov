@@ -15,7 +15,6 @@
 #include "network.h"
 #include "libfrr.h"
 #include "mgmt_msg.h"
-#include "mgmt_msg_native.h"
 #include "mgmt_pb.h"
 #include "mgmtd/mgmt.h"
 #include "mgmtd/mgmt_memory.h"
@@ -297,14 +296,6 @@ mgmt_be_adapter_cleanup_old_conn(struct mgmt_be_client_adapter *adapter)
 	}
 }
 
-static int be_adapter_send_native_msg(struct mgmt_be_client_adapter *adapter,
-				      void *msg, size_t len,
-				      bool short_circuit_ok)
-{
-	return msg_conn_send_msg(adapter->conn, MGMT_MSG_VERSION_NATIVE, msg,
-				 len, NULL, short_circuit_ok);
-}
-
 static int mgmt_be_adapter_send_msg(struct mgmt_be_client_adapter *adapter,
 				    Mgmtd__BeMessage *be_msg)
 {
@@ -427,11 +418,30 @@ mgmt_be_adapter_handle_msg(struct mgmt_be_client_adapter *adapter,
 			be_msg->cfg_apply_reply->success,
 			be_msg->cfg_apply_reply->error_if_any, adapter);
 		break;
+	case MGMTD__BE_MESSAGE__MESSAGE_GET_REPLY:
+		MGMTD_BE_ADAPTER_DBG(
+			"Got GET_REPLY from '%s' txn-id %" PRIx64
+			" err:'%s'", adapter->name,
+			be_msg->get_reply->txn_id,
+			be_msg->get_reply->error_if_any
+				? be_msg->get_reply->error_if_any
+				: "None");
+		/*
+		 * Forward the get reply to txn module.
+		 */
+		mgmt_txn_notify_get_data_reply(
+			be_msg->get_reply->txn_id, be_msg->get_reply->req_id,
+			be_msg->get_reply->success, be_msg->get_reply->format,
+			be_msg->get_reply->format == MGMTD__YANG_DATA_FORMAT__BINARY ?
+			(char *)be_msg->get_reply->binary.data : be_msg->get_reply->text,
+			be_msg->get_reply->error_if_any, adapter);
+		break;
 	/*
 	 * NOTE: The following messages are always sent from MGMTD to
 	 * Backend clients only and/or need not be handled on MGMTd.
 	 */
 	case MGMTD__BE_MESSAGE__MESSAGE_SUBSCR_REPLY:
+	case MGMTD__BE_MESSAGE__MESSAGE_GET_REQ:
 	case MGMTD__BE_MESSAGE__MESSAGE_TXN_REQ:
 	case MGMTD__BE_MESSAGE__MESSAGE_CFG_DATA_REQ:
 	case MGMTD__BE_MESSAGE__MESSAGE_CFG_APPLY_REQ:
@@ -514,75 +524,35 @@ int mgmt_be_send_cfgapply_req(struct mgmt_be_client_adapter *adapter,
 	return mgmt_be_adapter_send_msg(adapter, &be_msg);
 }
 
-int mgmt_be_send_native(enum mgmt_be_client_id id, void *msg, size_t len)
+int mgmt_be_send_get_req(struct mgmt_be_client_adapter *adapter,
+			 uint64_t txn_id, uint64_t req_id,
+			 Mgmtd__YangDataFormat format,
+			 const char *xpath)
 {
-	struct mgmt_be_client_adapter *adapter = mgmt_be_get_adapter_by_id(id);
+	Mgmtd__BeMessage be_msg;
+	Mgmtd__BeOperDataGetReq get_req;
 
-	if (!adapter)
-		return -1;
+	mgmtd__be_oper_data_get_req__init(&get_req);
+	get_req.txn_id = txn_id;
+	get_req.req_id = req_id;
+	get_req.format = format;
+	get_req.xpath = (char *)xpath;
 
-	return be_adapter_send_native_msg(adapter, msg, len, false);
+	mgmtd__be_message__init(&be_msg);
+	be_msg.message_case = MGMTD__BE_MESSAGE__MESSAGE_GET_REQ;
+	be_msg.get_req = &get_req;
+
+	MGMTD_BE_ADAPTER_DBG("Sending GET_REQ to '%s' txn-id: %" PRIu64,
+			     adapter->name, txn_id);
+
+	return mgmt_be_adapter_send_msg(adapter, &be_msg);
 }
-
-/*
- * Handle a native encoded message
- */
-static void be_adapter_handle_native_msg(struct mgmt_be_client_adapter *adapter,
-					 struct mgmt_msg_header *msg,
-					 size_t msg_len)
-{
-	struct mgmt_msg_tree_data *tree_msg;
-	struct mgmt_msg_error *error_msg;
-
-	/* get the transaction */
-
-	switch (msg->code) {
-	case MGMT_MSG_CODE_ERROR:
-		error_msg = (typeof(error_msg))msg;
-		MGMTD_BE_ADAPTER_DBG("Got ERROR from '%s' txn-id %" PRIx64,
-				     adapter->name, msg->txn_id);
-
-		/* Forward the reply to the txn module */
-		mgmt_txn_notify_error(adapter, msg->txn_id, msg->req_id,
-				      error_msg->error, error_msg->errstr);
-
-		break;
-	case MGMT_MSG_CODE_TREE_DATA:
-		/* tree data from a backend client */
-		tree_msg = (typeof(tree_msg))msg;
-		MGMTD_BE_ADAPTER_DBG("Got TREE_DATA from '%s' txn-id %" PRIx64,
-				     adapter->name, msg->txn_id);
-
-		/* Forward the reply to the txn module */
-		mgmt_txn_notify_tree_data_reply(adapter, tree_msg, msg_len);
-		break;
-	default:
-		MGMTD_BE_ADAPTER_ERR("unknown native message txn-id %" PRIu64
-				     " req-id %" PRIu64
-				     " code %u from BE client for adapter %s",
-				     msg->txn_id, msg->req_id, msg->code,
-				     adapter->name);
-		break;
-	}
-}
-
 
 static void mgmt_be_adapter_process_msg(uint8_t version, uint8_t *data,
 					size_t len, struct msg_conn *conn)
 {
 	struct mgmt_be_client_adapter *adapter = conn->user;
 	Mgmtd__BeMessage *be_msg;
-
-	if (version == MGMT_MSG_VERSION_NATIVE) {
-		struct mgmt_msg_header *msg = (typeof(msg))data;
-
-		if (len >= sizeof(*msg))
-			be_adapter_handle_native_msg(adapter, msg, len);
-		else
-			MGMTD_BE_ADAPTER_ERR("native message to adapter %s too short %zu",
-					     adapter->name, len);
-		return;
-	}
 
 	be_msg = mgmtd__be_message__unpack(NULL, len, data);
 	if (!be_msg) {
