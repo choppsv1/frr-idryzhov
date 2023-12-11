@@ -419,7 +419,7 @@ extern int vty_mgmt_send_commit_config(struct vty *vty, bool validate_only,
 				       bool abort);
 extern int vty_mgmt_send_get_req(struct vty *vty, bool is_config,
 				 Mgmtd__DatastoreId datastore,
-				 const char **xpath_list, int num_req);
+				 LYD_FORMAT format, const char *xpath);
 extern int vty_mgmt_send_get_tree_req(struct vty *vty, LYD_FORMAT result_type,
 				      const char *xpath);
 extern int vty_mgmt_send_lockds_req(struct vty *vty, Mgmtd__DatastoreId ds_id,

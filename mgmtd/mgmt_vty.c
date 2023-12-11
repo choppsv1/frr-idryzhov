@@ -179,7 +179,7 @@ DEFPY(mgmt_delete_config_data, mgmt_delete_config_data_cmd,
 }
 
 DEFPY(show_mgmt_get_config, show_mgmt_get_config_cmd,
-      "show mgmt get-config [candidate|operational|running]$dsname WORD$path",
+      "show mgmt get-config [candidate|operational|running]$dsname WORD$path [json|xml]$fmt",
       SHOW_STR MGMTD_STR
       "Get configuration data from a specific configuration datastore\n"
       "Candidate datastore (default)\n"
@@ -187,14 +187,13 @@ DEFPY(show_mgmt_get_config, show_mgmt_get_config_cmd,
       "Running datastore\n"
       "XPath expression specifying the YANG data path\n")
 {
-	const char *xpath_list[VTY_MAXCFGCHANGES] = {0};
+	LYD_FORMAT format = (fmt && fmt[0] == 'x') ? LYD_XML : LYD_JSON;
 	Mgmtd__DatastoreId datastore = MGMTD_DS_CANDIDATE;
 
 	if (dsname)
 		datastore = mgmt_ds_name2id(dsname);
 
-	xpath_list[0] = path;
-	vty_mgmt_send_get_req(vty, true, datastore, xpath_list, 1);
+	vty_mgmt_send_get_req(vty, true, datastore, format, path);
 	return CMD_SUCCESS;
 }
 

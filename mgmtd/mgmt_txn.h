@@ -190,8 +190,8 @@ extern int mgmt_txn_send_commit_config_req(uint64_t txn_id, uint64_t req_id,
 extern int mgmt_txn_send_get_req(uint64_t txn_id, uint64_t req_id,
 				 Mgmtd__DatastoreId ds_id,
 				 struct nb_config *cfg_root,
-				 Mgmtd__YangGetDataReq **data_req,
-				 size_t num_reqs);
+				 Mgmtd__YangDataFormat format,
+				 const char *xpath);
 
 
 /**

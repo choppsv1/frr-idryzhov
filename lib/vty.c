@@ -71,7 +71,6 @@ struct nb_config *vty_mgmt_candidate_config;
 static struct mgmt_fe_client *mgmt_fe_client;
 static bool mgmt_fe_connected;
 static uint64_t mgmt_client_id_next;
-static uint64_t mgmt_last_req_id = UINT64_MAX;
 
 PREDECL_DLIST(vtyservs);
 
@@ -3624,11 +3623,10 @@ static void vty_mgmt_commit_config_result_notified(
 static int vty_mgmt_get_data_result_notified(
 	struct mgmt_fe_client *client, uintptr_t usr_data, uint64_t client_id,
 	uintptr_t session_id, uintptr_t session_ctx, uint64_t req_id,
-	bool success, Mgmtd__DatastoreId ds_id, Mgmtd__YangData **yang_data,
-	size_t num_data, int next_key, char *errmsg_if_any)
+	bool success, Mgmtd__DatastoreId ds_id, Mgmtd__YangDataFormat format,
+	char *data, char *errmsg_if_any)
 {
 	struct vty *vty;
-	size_t indx;
 
 	vty = (struct vty *)session_ctx;
 
@@ -3646,20 +3644,9 @@ static int vty_mgmt_get_data_result_notified(
 			    " req-id %" PRIu64,
 			    client_id, req_id);
 
-	if (req_id != mgmt_last_req_id) {
-		mgmt_last_req_id = req_id;
-		vty_out(vty, "[\n");
-	}
+	vty_out(vty, "%s\n", data);
 
-	for (indx = 0; indx < num_data; indx++) {
-		vty_out(vty, "  \"%s\": \"%s\"\n", yang_data[indx]->xpath,
-			yang_data[indx]->value->encoded_str_val);
-	}
-	if (next_key < 0) {
-		vty_out(vty, "]\n");
-		vty_mgmt_resume_response(vty,
-					 success ? CMD_SUCCESS : CMD_WARNING);
-	}
+	vty_mgmt_resume_response(vty, CMD_SUCCESS);
 
 	return 0;
 }
@@ -4142,28 +4129,14 @@ int vty_mgmt_send_commit_config(struct vty *vty, bool validate_only, bool abort)
 }
 
 int vty_mgmt_send_get_req(struct vty *vty, bool is_config,
-			  Mgmtd__DatastoreId datastore, const char **xpath_list,
-			  int num_req)
+			  Mgmtd__DatastoreId datastore, LYD_FORMAT format,
+			  const char *xpath)
 {
-	Mgmtd__YangData yang_data[VTY_MAXCFGCHANGES];
-	Mgmtd__YangGetDataReq get_req[VTY_MAXCFGCHANGES];
-	Mgmtd__YangGetDataReq *getreq[VTY_MAXCFGCHANGES];
-	int i;
-
 	vty->mgmt_req_id++;
 
-	for (i = 0; i < num_req; i++) {
-		mgmt_yang_get_data_req_init(&get_req[i]);
-		mgmt_yang_data_init(&yang_data[i]);
-
-		yang_data->xpath = (char *)xpath_list[i];
-
-		get_req[i].data = &yang_data[i];
-		getreq[i] = &get_req[i];
-	}
 	if (mgmt_fe_send_get_req(mgmt_fe_client, vty->mgmt_session_id,
-				 vty->mgmt_req_id, is_config, datastore, getreq,
-				 num_req)) {
+				 vty->mgmt_req_id, is_config, datastore,
+				 lyd_to_mgmt_format(format), xpath)) {
 		zlog_err("Failed to send GET- to MGMTD for req-id %" PRIu64 ".",
 			 vty->mgmt_req_id);
 		vty_out(vty, "Failed to send GET-CONFIG to MGMTD!\n");

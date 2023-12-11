@@ -463,19 +463,32 @@ static int fe_adapter_send_commit_cfg_reply(
 
 static int fe_adapter_send_get_reply(struct mgmt_fe_session_ctx *session,
 				     Mgmtd__DatastoreId ds_id, uint64_t req_id,
-				     bool success, Mgmtd__YangDataReply *data,
+				     bool success, LYD_FORMAT format,
+				     const struct lyd_node *config,
 				     const char *error_if_any)
 {
 	Mgmtd__FeMessage fe_msg;
 	Mgmtd__FeGetReply get_reply;
+	char *data = NULL;
+	int ret;
 
 	assert(session->adapter);
+
+	if (success && config) {
+		LY_ERR err = lyd_print_mem(&data, config, format,
+					   LYD_PRINT_WITHSIBLINGS);
+		if (err) {
+			error_if_any = "Failed to print YANG tree";
+			data = NULL;
+		}
+	}
 
 	mgmtd__fe_get_reply__init(&get_reply);
 	get_reply.session_id = session->session_id;
 	get_reply.ds_id = ds_id;
 	get_reply.req_id = req_id;
 	get_reply.success = success;
+	get_reply.format = lyd_to_mgmt_format(format);
 	get_reply.data = data;
 	if (error_if_any)
 		get_reply.error_if_any = (char *)error_if_any;
@@ -490,11 +503,16 @@ static int fe_adapter_send_get_reply(struct mgmt_fe_session_ctx *session,
 	/*
 	 * Cleanup the SHOW transaction associated with this session.
 	 */
-	if (session->txn_id && (!success || (data && data->next_indx < 0)))
+	if (session->txn_id)
 		mgmt_fe_session_register_event(session,
 					       MGMTD_FE_SESSION_SHOW_TXN_CLNUP);
 
-	return fe_adapter_send_msg(session->adapter, &fe_msg, false);
+	ret = fe_adapter_send_msg(session->adapter, &fe_msg, false);
+
+	if (data)
+		free(data);
+
+	return ret;
 }
 
 static int fe_adapter_send_error(struct mgmt_fe_session_ctx *session,
@@ -788,10 +806,12 @@ static int mgmt_fe_session_handle_get_req_msg(struct mgmt_fe_session_ctx *sessio
 	struct mgmt_ds_ctx *ds_ctx;
 	struct nb_config *cfg_root = NULL;
 	Mgmtd__DatastoreId ds_id = get_req->ds_id;
+	Mgmtd__YangDataFormat format = get_req->format;
 	uint64_t req_id = get_req->req_id;
 
 	if (ds_id != MGMTD_DS_CANDIDATE && ds_id != MGMTD_DS_RUNNING) {
-		fe_adapter_send_get_reply(session, ds_id, req_id, false, NULL,
+		fe_adapter_send_get_reply(session, ds_id, req_id, false, format,
+					  NULL,
 					  "get-req on unsupported datastore");
 		return 0;
 	}
@@ -806,7 +826,7 @@ static int mgmt_fe_session_handle_get_req_msg(struct mgmt_fe_session_ctx *sessio
 						  MGMTD_TXN_TYPE_SHOW);
 		if (session->txn_id == MGMTD_SESSION_ID_NONE) {
 			fe_adapter_send_get_reply(session, ds_id, req_id, false,
-						  NULL,
+						  format, NULL,
 						  "Failed to create a Show transaction!");
 			return -1;
 		}
@@ -815,7 +835,8 @@ static int mgmt_fe_session_handle_get_req_msg(struct mgmt_fe_session_ctx *sessio
 				     " for session-id: %" PRIu64,
 				     session->txn_id, session->session_id);
 	} else {
-		fe_adapter_send_get_reply(session, ds_id, req_id, false, NULL,
+		fe_adapter_send_get_reply(session, ds_id, req_id, false, format,
+					  NULL,
 					  "Request processing for GET failed!");
 		MGMTD_FE_ADAPTER_DBG("Transaction in progress txn-id: %" PRIu64
 				     " for session-id: %" PRIu64,
@@ -832,8 +853,9 @@ static int mgmt_fe_session_handle_get_req_msg(struct mgmt_fe_session_ctx *sessio
 	 * Create a GET request under the transaction.
 	 */
 	if (mgmt_txn_send_get_req(session->txn_id, req_id, ds_id, cfg_root,
-				  get_req->data, get_req->n_data)) {
-		fe_adapter_send_get_reply(session, ds_id, req_id, false, NULL,
+				  format, get_req->xpath)) {
+		fe_adapter_send_get_reply(session, ds_id, req_id, false, format,
+					  NULL,
 					  "Request processing for GET failed!");
 
 		goto failed;
@@ -1022,10 +1044,10 @@ mgmt_fe_adapter_handle_msg(struct mgmt_fe_client_adapter *adapter,
 		break;
 	case MGMTD__FE_MESSAGE__MESSAGE_GET_REQ:
 		session = mgmt_session_id2ctx(fe_msg->get_req->session_id);
-		MGMTD_FE_ADAPTER_DBG("Got GET_REQ for DS:%s (xpaths: %d) on session-id %" PRIu64
+		MGMTD_FE_ADAPTER_DBG("Got GET_REQ for DS:%s (xpath: %s) on session-id %" PRIu64
 				     " from '%s'",
 				     mgmt_ds_id2name(fe_msg->get_req->ds_id),
-				     (int)fe_msg->get_req->n_data,
+				     fe_msg->get_req->xpath,
 				     fe_msg->get_req->session_id, adapter->name);
 		mgmt_fe_session_handle_get_req_msg(session, fe_msg->get_req);
 		break;
@@ -1401,8 +1423,8 @@ int mgmt_fe_send_commit_cfg_reply(uint64_t session_id, uint64_t txn_id,
 
 int mgmt_fe_send_get_reply(uint64_t session_id, uint64_t txn_id,
 			   Mgmtd__DatastoreId ds_id, uint64_t req_id,
-			   enum mgmt_result result,
-			   Mgmtd__YangDataReply *data_resp,
+			   bool success, LYD_FORMAT format,
+			   const struct lyd_node *config,
 			   const char *error_if_any)
 {
 	struct mgmt_fe_session_ctx *session;
@@ -1411,9 +1433,8 @@ int mgmt_fe_send_get_reply(uint64_t session_id, uint64_t txn_id,
 	if (!session || session->txn_id != txn_id)
 		return -1;
 
-	return fe_adapter_send_get_reply(session, ds_id, req_id,
-					 result == MGMTD_SUCCESS, data_resp,
-					 error_if_any);
+	return fe_adapter_send_get_reply(session, ds_id, req_id, success,
+					 format, config, error_if_any);
 }
 
 int mgmt_fe_adapter_send_tree_data(uint64_t session_id, uint64_t txn_id,

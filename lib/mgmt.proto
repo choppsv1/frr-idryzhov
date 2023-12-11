@@ -253,7 +253,8 @@ message FeGetReq {
   required bool config = 2;
   required DatastoreId ds_id = 3;
   required uint64 req_id = 4;
-  repeated YangGetDataReq data = 5;
+  required YangDataFormat format = 5;
+  required string xpath = 6;
 }
 
 message FeGetReply {
@@ -262,8 +263,9 @@ message FeGetReply {
   required DatastoreId ds_id = 3;
   required uint64 req_id = 4;
   required bool success = 5;
-  optional string error_if_any = 6;
-  optional YangDataReply data = 7;
+  required YangDataFormat format = 6;
+  optional string data = 7;
+  optional string error_if_any = 8;
 }
 
 message FeNotifyDataReq {

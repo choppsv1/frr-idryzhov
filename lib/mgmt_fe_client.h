@@ -108,8 +108,8 @@ struct mgmt_fe_client_cbs {
 			       uintptr_t session_id,
 			       uintptr_t user_session_client, uint64_t req_id,
 			       bool success, Mgmtd__DatastoreId ds_id,
-			       Mgmtd__YangData **yang_data, size_t num_data,
-			       int next_key, char *errmsg_if_any);
+			       Mgmtd__YangDataFormat format, char *data,
+			       char *errmsg_if_any);
 
 	int (*data_notify)(uint64_t client_id, uint64_t session_id,
 			   uintptr_t user_data, uint64_t req_id,
@@ -340,7 +340,7 @@ extern int mgmt_fe_send_commitcfg_req(struct mgmt_fe_client *client,
 extern int mgmt_fe_send_get_req(struct mgmt_fe_client *client,
 				uint64_t session_id, uint64_t req_id,
 				bool is_config, Mgmtd__DatastoreId ds_id,
-				Mgmtd__YangGetDataReq **data_req, int num_reqs);
+				Mgmtd__YangDataFormat format, const char *xpath);
 
 
 /*

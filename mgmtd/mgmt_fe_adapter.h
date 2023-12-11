@@ -134,8 +134,8 @@ extern int mgmt_fe_send_commit_cfg_reply(
  */
 extern int mgmt_fe_send_get_reply(uint64_t session_id, uint64_t txn_id,
 				  Mgmtd__DatastoreId ds_id, uint64_t req_id,
-				  enum mgmt_result result,
-				  Mgmtd__YangDataReply *data_resp,
+				  bool success, LYD_FORMAT format,
+				  const struct lyd_node *config,
 				  const char *error_if_any);
 
 /**
