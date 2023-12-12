@@ -178,37 +178,32 @@ DEFPY(mgmt_delete_config_data, mgmt_delete_config_data_cmd,
 	return CMD_SUCCESS;
 }
 
-DEFPY(show_mgmt_get_config, show_mgmt_get_config_cmd,
-      "show mgmt get-config [candidate|operational|running]$dsname WORD$path [json|xml]$fmt",
+DEFPY(show_mgmt_get_config, show_mgmt_get_cmd,
+      "show mgmt get [candidate|operational|running]$dsname WORD$path [config-only|data-only]$content [json|xml]$fmt",
       SHOW_STR MGMTD_STR
       "Get configuration data from a specific configuration datastore\n"
-      "Candidate datastore (default)\n"
-      "Operational datastore\n"
+      "Candidate datastore\n"
+      "Operational datastore (default)\n"
       "Running datastore\n"
-      "XPath expression specifying the YANG data path\n")
-{
-	LYD_FORMAT format = (fmt && fmt[0] == 'x') ? LYD_XML : LYD_JSON;
-	Mgmtd__DatastoreId datastore = MGMTD_DS_CANDIDATE;
-
-	if (dsname)
-		datastore = mgmt_ds_name2id(dsname);
-
-	vty_mgmt_send_get_req(vty, true, datastore, format, path);
-	return CMD_SUCCESS;
-}
-
-DEFPY(show_mgmt_get_data, show_mgmt_get_data_cmd,
-      "show mgmt get-data WORD$path [json|xml]$fmt",
-      SHOW_STR
-      MGMTD_STR
-      "Get a data from the operational datastore\n"
-      "XPath expression specifying the YANG data root\n"
+      "XPath expression specifying the YANG data path\n"
+      "Fetch only \"config true\" nodes\n"
+      "Fetch only \"config false\" nodes\n"
       "JSON output format\n"
       "XML output format\n")
 {
 	LYD_FORMAT format = (fmt && fmt[0] == 'x') ? LYD_XML : LYD_JSON;
+	Mgmtd__DatastoreId datastore = MGMTD_DS_OPERATIONAL;
+	bool has_config = false, config = false;
 	int plen = strlen(path);
 	char *xpath = NULL;
+
+	if (dsname)
+		datastore = mgmt_ds_name2id(dsname);
+
+	if (content) {
+		has_config = true;
+		config = content[0] == 'c' ? true : false;
+	}
 
 	/* get rid of extraneous trailing slash-* or single '/' unless root */
 	if (plen > 2 && ((path[plen - 2] == '/' && path[plen - 1] == '*') ||
@@ -219,7 +214,7 @@ DEFPY(show_mgmt_get_data, show_mgmt_get_data_cmd,
 		path = xpath;
 	}
 
-	vty_mgmt_send_get_tree_req(vty, format, path);
+	vty_mgmt_send_get_req(vty, has_config, config, datastore, format, path);
 
 	if (xpath)
 		XFREE(MTYPE_TMP, xpath);
@@ -508,6 +503,8 @@ void mgmt_vty_init(void)
 	static_vty_init();
 #endif
 
+	if_cmd_init(NULL);
+
 	event_add_event(mm->master, mgmt_config_read_in, NULL, 0,
 			&mgmt_daemon_info->read_in);
 
@@ -519,8 +516,7 @@ void mgmt_vty_init(void)
 	install_element(VIEW_NODE, &show_mgmt_fe_adapter_cmd);
 	install_element(VIEW_NODE, &show_mgmt_txn_cmd);
 	install_element(VIEW_NODE, &show_mgmt_ds_cmd);
-	install_element(VIEW_NODE, &show_mgmt_get_config_cmd);
-	install_element(VIEW_NODE, &show_mgmt_get_data_cmd);
+	install_element(VIEW_NODE, &show_mgmt_get_cmd);
 	install_element(VIEW_NODE, &show_mgmt_dump_data_cmd);
 	install_element(VIEW_NODE, &show_mgmt_map_xpath_cmd);
 	install_element(VIEW_NODE, &show_mgmt_cmt_hist_cmd);

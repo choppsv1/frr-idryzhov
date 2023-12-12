@@ -27,8 +27,7 @@
 enum mgmt_txn_event {
 	MGMTD_TXN_PROC_SETCFG = 1,
 	MGMTD_TXN_PROC_COMMITCFG,
-	MGMTD_TXN_PROC_GETCFG,
-	MGMTD_TXN_PROC_GETTREE,
+	MGMTD_TXN_PROC_GET,
 	MGMTD_TXN_COMMITCFG_TIMEOUT,
 	MGMTD_TXN_GETTREE_TIMEOUT,
 	MGMTD_TXN_CLEANUP
@@ -142,21 +141,18 @@ struct mgmt_commit_cfg_req {
 	struct mgmt_commit_stats *cmt_stats;
 };
 
-struct mgmt_get_data_req {
+struct mgmt_get_req {
 	Mgmtd__DatastoreId ds_id;
-	struct nb_config *cfg_root;
+	struct mgmt_ds_ctx *ds_ctx;
 	LYD_FORMAT format;
 	char *xpath;
-};
-
-
-struct txn_req_get_tree {
-	char *xpath;	       /* xpath of tree to get */
-	uint8_t result_type;   /* LYD_FORMAT for results */
+	bool config; /* include "config true" nodes */
+	bool state; /* include "config false" nodes */
+	const char *error;
+	uint64_t clients; /* Bitmask of interested clients */
 	uint64_t sent_clients; /* Bitmask of clients sent req to */
 	uint64_t recv_clients; /* Bitmask of clients recv reply from */
-	int32_t partial_error; /* an error while gather results */
-	struct lyd_node *client_results; /* result tree from clients */
+	struct lyd_node *result; /* result tree from clients */
 };
 
 struct mgmt_txn_req {
@@ -165,8 +161,7 @@ struct mgmt_txn_req {
 	uint64_t req_id;
 	union {
 		struct mgmt_set_cfg_req *set_cfg;
-		struct mgmt_get_data_req *get_data;
-		struct txn_req_get_tree *get_tree;
+		struct mgmt_get_req *get;
 		struct mgmt_commit_cfg_req commit_cfg;
 	} req;
 
@@ -188,9 +183,7 @@ struct mgmt_txn_ctx {
 
 	struct event *proc_set_cfg;
 	struct event *proc_comm_cfg;
-	struct event *proc_get_cfg;
-	struct event *proc_get_data;
-	struct event *proc_get_tree;
+	struct event *proc_get;
 	struct event *comm_cfg_timeout;
 	struct event *get_tree_timeout;
 	struct event *clnup;
@@ -214,16 +207,10 @@ struct mgmt_txn_ctx {
 	 */
 	struct mgmt_txn_reqs_head set_cfg_reqs;
 	/*
-	 * List of pending get-config requests for a given
-	 * transaction/session. Just one list for requests
-	 * not processed at all. There's no backend interaction
-	 * involved.
+	 * List of pending get requests for a given
+	 * transaction/session.
 	 */
-	struct mgmt_txn_reqs_head get_cfg_reqs;
-	/*
-	 * List of pending get-tree requests.
-	 */
-	struct mgmt_txn_reqs_head get_tree_reqs;
+	struct mgmt_txn_reqs_head get_reqs;
 	/*
 	 * There will always be one commit-config allowed for a given
 	 * transaction/session. No need to maintain lists for it.
@@ -372,21 +359,13 @@ static struct mgmt_txn_req *mgmt_txn_req_alloc(struct mgmt_txn_ctx *txn,
 
 		txn_req->req.commit_cfg.curr_phase = MGMTD_COMMIT_PHASE_PREPARE_CFG;
 		break;
-	case MGMTD_TXN_PROC_GETCFG:
-		txn_req->req.get_data =
-			XCALLOC(MTYPE_MGMTD_TXN_GETDATA_REQ,
-				sizeof(struct mgmt_get_data_req));
-		assert(txn_req->req.get_data);
-		mgmt_txn_reqs_add_tail(&txn->get_cfg_reqs, txn_req);
-		MGMTD_TXN_DBG("Added a new GETCFG req-id: %" PRIu64
-			      " txn-id: %" PRIu64 " session-id: %" PRIu64,
-			      txn_req->req_id, txn->txn_id, txn->session_id);
-		break;
-	case MGMTD_TXN_PROC_GETTREE:
-		txn_req->req.get_tree = XCALLOC(MTYPE_MGMTD_TXN_GETTREE_REQ,
-						sizeof(struct txn_req_get_tree));
-		mgmt_txn_reqs_add_tail(&txn->get_tree_reqs, txn_req);
-		MGMTD_TXN_DBG("Added a new GETTREE req-id: %" PRIu64
+	case MGMTD_TXN_PROC_GET:
+		txn_req->req.get =
+			XCALLOC(MTYPE_MGMTD_TXN_GET_REQ,
+				sizeof(struct mgmt_get_req));
+		assert(txn_req->req.get);
+		mgmt_txn_reqs_add_tail(&txn->get_reqs, txn_req);
+		MGMTD_TXN_DBG("Added a new GET req-id: %" PRIu64
 			      " txn-id: %" PRIu64 " session-id: %" PRIu64,
 			      txn_req->req_id, txn->txn_id, txn->session_id);
 		break;
@@ -471,25 +450,14 @@ static void mgmt_txn_req_free(struct mgmt_txn_req **txn_req)
 							    adapter);
 		}
 		break;
-	case MGMTD_TXN_PROC_GETCFG:
-		req_list = &(*txn_req)->txn->get_cfg_reqs;
-		MGMTD_TXN_DBG("Deleting GETCFG req-id: %" PRIu64
+	case MGMTD_TXN_PROC_GET:
+		req_list = &(*txn_req)->txn->get_reqs;
+		MGMTD_TXN_DBG("Deleting GET req-id: %" PRIu64
 			      " txn-id: %" PRIu64,
 			      (*txn_req)->req_id, (*txn_req)->txn->txn_id);
-
-		if ((*txn_req)->req.get_data->cfg_root)
-			nb_config_free((*txn_req)->req.get_data->cfg_root);
-		XFREE(MTYPE_MGMTD_XPATH, (*txn_req)->req.get_data->xpath);
-		XFREE(MTYPE_MGMTD_TXN_GETDATA_REQ, (*txn_req)->req.get_data);
-		break;
-	case MGMTD_TXN_PROC_GETTREE:
-		MGMTD_TXN_DBG("Deleting GETTREE req-id: %" PRIu64
-			      " of txn-id: %" PRIu64,
-			      (*txn_req)->req_id, (*txn_req)->txn->txn_id);
-		req_list = &(*txn_req)->txn->get_tree_reqs;
-		lyd_free_all((*txn_req)->req.get_tree->client_results);
-		XFREE(MTYPE_MGMTD_XPATH, (*txn_req)->req.get_tree->xpath);
-		XFREE(MTYPE_MGMTD_TXN_GETTREE_REQ, (*txn_req)->req.get_tree);
+		lyd_free_all((*txn_req)->req.get->result);
+		XFREE(MTYPE_MGMTD_XPATH, (*txn_req)->req.get->xpath);
+		XFREE(MTYPE_MGMTD_TXN_GET_REQ, (*txn_req)->req.get);
 		break;
 	case MGMTD_TXN_COMMITCFG_TIMEOUT:
 	case MGMTD_TXN_GETTREE_TIMEOUT:
@@ -1243,31 +1211,19 @@ static void mgmt_txn_cfg_commit_timedout(struct event *thread)
 static int txn_get_tree_data_done(struct mgmt_txn_ctx *txn,
 				  struct mgmt_txn_req *txn_req)
 {
-	struct txn_req_get_tree *get_tree = txn_req->req.get_tree;
+	struct mgmt_get_req *get_req = txn_req->req.get;
 	int ret = 0;
 
 	/* cancel timer and send reply onward */
 	EVENT_OFF(txn->get_tree_timeout);
 
-	ret = mgmt_fe_adapter_send_tree_data(txn->session_id, txn->txn_id,
-					     txn_req->req_id,
-					     get_tree->result_type,
-					     get_tree->client_results,
-					     get_tree->partial_error, false);
+	mgmt_fe_send_get_reply(txn->session_id, txn->txn_id, get_req->ds_id,
+			       txn_req->req_id, get_req->error == NULL,
+			       get_req->format, get_req->result,
+			       get_req->error);
 
 	/* we're done with the request */
 	mgmt_txn_req_free(&txn_req);
-
-	if (ret) {
-		MGMTD_TXN_ERR("Error saving the results of GETTREE for txn-id %" PRIu64
-			      " req_id %" PRIu64 " to requested type %u",
-			      txn->txn_id, txn_req->req_id,
-			      get_tree->result_type);
-
-		(void)mgmt_fe_adapter_txn_error(txn->txn_id, txn_req->req_id,
-						false, ret,
-						"Error converting results of GETTREE");
-	}
 
 	return ret;
 }
@@ -1278,8 +1234,8 @@ static void txn_get_tree_timeout(struct event *thread)
 	struct mgmt_txn_ctx *txn;
 	struct mgmt_txn_req *txn_req;
 
-	txn_req = (struct mgmt_txn_req *)EVENT_ARG(thread);
-	txn = txn_req->txn;
+	txn = (struct mgmt_txn_ctx *)EVENT_ARG(thread);
+	txn_req = mgmt_txn_reqs_first(&txn->get_reqs);
 
 	assert(txn);
 	assert(txn->type == MGMTD_TXN_TYPE_SHOW);
@@ -1295,7 +1251,7 @@ static void txn_get_tree_timeout(struct event *thread)
 	 * adapter.
 	 */
 
-	txn_req->req.get_tree->partial_error = -ETIMEDOUT;
+	txn_req->req.get->error = (char *)"Getting data from backends timed out";
 	txn_get_tree_data_done(txn, txn_req);
 }
 
@@ -1439,63 +1395,101 @@ static void mgmt_txn_process_commit_cfg(struct event *thread)
 		      mgmt_txn_commit_phase_str(txn, false));
 }
 
-static void mgmt_txn_process_get_cfg(struct event *thread)
+static void mgmt_txn_process_get(struct event *thread)
 {
+	struct mgmt_be_client_adapter *adapter;
 	struct mgmt_txn_ctx *txn;
 	struct mgmt_txn_req *txn_req;
-	struct mgmt_get_data_req *get_req;
-	struct lyd_node *dnode, *dup = NULL;
+	struct mgmt_get_req *get_req;
+	struct lyd_node *dnode;
+	enum mgmt_be_client_id id;
 	bool success = true;
 	const char *error = NULL;
-	LY_ERR err;
+	LY_ERR err = 0;
+	int ret;
 
 	txn = (struct mgmt_txn_ctx *)EVENT_ARG(thread);
 	assert(txn);
 
-	MGMTD_TXN_DBG("Processing %zu GET_CONFIG requests txn-id: %" PRIu64
+	MGMTD_TXN_DBG("Processing %zu GET requests txn-id: %" PRIu64
 		      " session-id: %" PRIu64,
-		      mgmt_txn_reqs_count(&txn->get_cfg_reqs), txn->txn_id,
+		      mgmt_txn_reqs_count(&txn->get_reqs), txn->txn_id,
 		      txn->session_id);
 
-	txn_req = mgmt_txn_reqs_first(&txn->get_cfg_reqs);
-	get_req = txn_req->req.get_data;
+	txn_req = mgmt_txn_reqs_first(&txn->get_reqs);
+	get_req = txn_req->req.get;
 
-	if (strmatch(get_req->xpath, "/")) {
-		dnode = get_req->cfg_root->dnode;
-	} else {
-		dnode = yang_dnode_get(get_req->cfg_root->dnode, get_req->xpath);
-		if (dnode) {
-			/*
-			 * If the request is for a subtree, use `lyd_dup_single`
-			 * to get only this subtree.
-			 */
-			err = lyd_dup_single(dnode, NULL,
-					     LYD_DUP_WITH_PARENTS |
-						     LYD_DUP_WITH_FLAGS |
-						     LYD_DUP_RECURSIVE,
-					     &dup);
-			if (!err) {
-				while (dup->parent) {
-					dup = lyd_parent(dup);
-				}
-				dnode = dup;
-			}
+	if (get_req->config) {
+		struct nb_config *config = mgmt_ds_get_nb_config(get_req->ds_ctx);
+
+		if (!config)
+			goto state;
+
+		if (strmatch(get_req->xpath, "/")) {
+			err = lyd_dup_siblings(config->dnode, NULL, LYD_DUP_RECURSIVE | LYD_DUP_WITH_FLAGS, &get_req->result);
+			if (err)
+				goto error;
 		} else {
-			err = LY_ENOTFOUND;
+			dnode = yang_dnode_get(config->dnode, get_req->xpath);
+			if (dnode) {
+				/*
+				 * If the request is for a subtree, use `lyd_dup_single`
+				 * to get only this subtree.
+				 */
+				err = lyd_dup_single(dnode, NULL,
+						     LYD_DUP_WITH_PARENTS |
+							     LYD_DUP_WITH_FLAGS |
+							     LYD_DUP_RECURSIVE,
+						     &get_req->result);
+				if (err)
+					goto error;
+
+				while (get_req->result->parent) {
+					get_req->result = lyd_parent(get_req->result);
+				}
+			}
+
+			if (err)
+				goto error;
+		}
+	}
+state:
+	if (get_req->state && get_req->ds_id == MGMTD_DS_OPERATIONAL) {
+		FOREACH_BE_CLIENT_BITS (id, get_req->clients) {
+			adapter = mgmt_be_get_adapter_by_id(id);
+			if (!adapter)
+				continue;
+
+			ret = mgmt_be_send_get_req(adapter, txn->txn_id, txn_req->req_id,
+					   lyd_to_mgmt_format(LYD_LYB),
+					   get_req->xpath);
+			if (ret) {
+				MGMTD_TXN_ERR("Could not send GET request to backend client %s",
+					      mgmt_be_client_id2name(id));
+				continue;
+			}
+
+			MGMTD_TXN_DBG("Sent GET request to backend client %s",
+			      mgmt_be_client_id2name(id));
+
+			/* record that we sent the request to the client */
+			get_req->sent_clients |= (1u << id);
 		}
 
-		if (err) {
-			success = false;
-			error = ly_strerrcode(err);
-		}
+		mgmt_txn_register_event(txn, MGMTD_TXN_GETTREE_TIMEOUT);
+
+		/* If state is requested, the reply is sent from the callback. */
+		return;
+	}
+error:
+	if (err) {
+		success = false;
+		error = ly_strerrcode(err);
 	}
 
 	mgmt_fe_send_get_reply(txn->session_id, txn->txn_id, get_req->ds_id,
-			       txn_req->req_id, success, get_req->format, dnode,
+			       txn_req->req_id, success, get_req->format, get_req->result,
 			       error);
-
-	if (dup)
-		lyd_free_all(dup);
 
 	mgmt_txn_req_free(&txn_req);
 }
@@ -1539,8 +1533,7 @@ static struct mgmt_txn_ctx *mgmt_txn_create_new(uint64_t session_id,
 		mgmt_txns_add_tail(&mgmt_txn_mm->txn_list, txn);
 		/* TODO: why do we need N lists for one transaction */
 		mgmt_txn_reqs_init(&txn->set_cfg_reqs);
-		mgmt_txn_reqs_init(&txn->get_cfg_reqs);
-		mgmt_txn_reqs_init(&txn->get_tree_reqs);
+		mgmt_txn_reqs_init(&txn->get_reqs);
 		txn->commit_cfg_req = NULL;
 		txn->refcount = 0;
 		if (!mgmt_txn_mm->next_txn_id)
@@ -1622,13 +1615,6 @@ static inline struct mgmt_txn_ctx *mgmt_txn_id2ctx(uint64_t txn_id)
 	return txn;
 }
 
-uint64_t mgmt_txn_get_session_id(uint64_t txn_id)
-{
-	struct mgmt_txn_ctx *txn = mgmt_txn_id2ctx(txn_id);
-
-	return txn ? txn->session_id : MGMTD_SESSION_ID_NONE;
-}
-
 static void mgmt_txn_lock(struct mgmt_txn_ctx *txn, const char *file, int line)
 {
 	txn->refcount++;
@@ -1650,8 +1636,7 @@ static void mgmt_txn_unlock(struct mgmt_txn_ctx **txn, const char *file,
 		if ((*txn)->type == MGMTD_TXN_TYPE_CONFIG)
 			if (mgmt_txn_mm->cfg_txn == *txn)
 				mgmt_txn_mm->cfg_txn = NULL;
-		EVENT_OFF((*txn)->proc_get_cfg);
-		EVENT_OFF((*txn)->proc_get_data);
+		EVENT_OFF((*txn)->proc_get);
 		EVENT_OFF((*txn)->proc_comm_cfg);
 		EVENT_OFF((*txn)->comm_cfg_timeout);
 		EVENT_OFF((*txn)->get_tree_timeout);
@@ -1714,9 +1699,9 @@ static void mgmt_txn_register_event(struct mgmt_txn_ctx *txn,
 		event_add_timer_tv(mgmt_txn_tm, mgmt_txn_process_commit_cfg,
 				   txn, &tv, &txn->proc_comm_cfg);
 		break;
-	case MGMTD_TXN_PROC_GETCFG:
-		event_add_timer_tv(mgmt_txn_tm, mgmt_txn_process_get_cfg, txn,
-				   &tv, &txn->proc_get_cfg);
+	case MGMTD_TXN_PROC_GET:
+		event_add_timer_tv(mgmt_txn_tm, mgmt_txn_process_get, txn,
+				   &tv, &txn->proc_get);
 		break;
 	case MGMTD_TXN_COMMITCFG_TIMEOUT:
 		event_add_timer(mgmt_txn_tm, mgmt_txn_cfg_commit_timedout, txn,
@@ -1732,9 +1717,6 @@ static void mgmt_txn_register_event(struct mgmt_txn_ctx *txn,
 		tv.tv_usec = MGMTD_TXN_CLEANUP_DELAY_USEC;
 		event_add_timer_tv(mgmt_txn_tm, mgmt_txn_cleanup, txn, &tv,
 				   &txn->clnup);
-		break;
-	case MGMTD_TXN_PROC_GETTREE:
-		assert(!"code bug do not register this event");
 		break;
 	}
 }
@@ -2103,7 +2085,8 @@ int mgmt_txn_notify_be_cfg_apply_reply(uint64_t txn_id, bool success,
 }
 
 int mgmt_txn_send_get_req(uint64_t txn_id, uint64_t req_id,
-			  Mgmtd__DatastoreId ds_id, struct nb_config *cfg_root,
+			  Mgmtd__DatastoreId ds_id, struct mgmt_ds_ctx *ds_ctx,
+			  bool config, bool state, uint64_t clients,
 			  Mgmtd__YangDataFormat format, const char *xpath)
 {
 	struct mgmt_txn_ctx *txn;
@@ -2114,72 +2097,18 @@ int mgmt_txn_send_get_req(uint64_t txn_id, uint64_t req_id,
 	if (!txn)
 		return -1;
 
-	req_event = MGMTD_TXN_PROC_GETCFG;
+	req_event = MGMTD_TXN_PROC_GET;
 	txn_req = mgmt_txn_req_alloc(txn, req_id, req_event);
-	txn_req->req.get_data->ds_id = ds_id;
-	txn_req->req.get_data->cfg_root = cfg_root;
-	txn_req->req.get_data->format = mgmt_to_lyd_format(format);
-	txn_req->req.get_data->xpath = XSTRDUP(MTYPE_MGMTD_XPATH, xpath);
+	txn_req->req.get->ds_id = ds_id;
+	txn_req->req.get->ds_ctx = ds_ctx;
+	txn_req->req.get->format = mgmt_to_lyd_format(format);
+	txn_req->req.get->xpath = XSTRDUP(MTYPE_MGMTD_XPATH, xpath);
+	txn_req->req.get->config = config;
+	txn_req->req.get->state = state;
+	txn_req->req.get->clients = clients;
 
 	mgmt_txn_register_event(txn, req_event);
 
-	return 0;
-}
-
-
-/**
- * Send get-tree requests to each client indicated in `clients` bitmask, which
- * has registered operational state that matches the given `xpath`
- */
-int mgmt_txn_send_get_tree_oper(uint64_t txn_id, uint64_t req_id,
-				uint64_t clients, LYD_FORMAT result_type,
-				const char *xpath)
-{
-	struct mgmt_be_client_adapter *adapter;
-	struct mgmt_txn_ctx *txn;
-	struct mgmt_txn_req *txn_req;
-	struct txn_req_get_tree *get_tree;
-	enum mgmt_be_client_id id;
-	int ret;
-
-	txn = mgmt_txn_id2ctx(txn_id);
-	if (!txn)
-		return -1;
-
-	/* If error in this function below here, be sure to free the req */
-	txn_req = mgmt_txn_req_alloc(txn, req_id, MGMTD_TXN_PROC_GETTREE);
-	get_tree = txn_req->req.get_tree;
-	get_tree->result_type = result_type;
-	get_tree->xpath = XSTRDUP(MTYPE_MGMTD_XPATH, xpath);
-
-	assert(clients);
-	FOREACH_BE_CLIENT_BITS (id, clients) {
-		adapter = mgmt_be_get_adapter_by_id(id);
-		if (!adapter)
-			continue;
-
-		ret = mgmt_be_send_get_req(adapter, txn_id, req_id,
-					   lyd_to_mgmt_format(LYD_LYB),
-					   xpath);
-		if (ret) {
-			MGMTD_TXN_ERR("Could not send GET request to backend client %s",
-				      mgmt_be_client_id2name(id));
-			continue;
-		}
-
-		MGMTD_TXN_DBG("Sent GET request to backend client %s",
-			      mgmt_be_client_id2name(id));
-
-		/* record that we sent the request to the client */
-		get_tree->sent_clients |= (1u << id);
-	}
-
-	/* Start timeout timer - pulled out of register event code so we can
-	 * pass a different arg
-	 */
-	event_add_timer(mgmt_txn_tm, txn_get_tree_timeout, txn_req,
-			MGMTD_TXN_GET_TREE_MAX_DELAY_SEC,
-			&txn->get_tree_timeout);
 	return 0;
 }
 
@@ -2194,7 +2123,7 @@ int mgmt_txn_notify_get_data_reply(uint64_t txn_id, uint64_t req_id,
 	enum mgmt_be_client_id id = adapter->id;
 	struct mgmt_txn_ctx *txn = mgmt_txn_id2ctx(txn_id);
 	struct mgmt_txn_req *txn_req;
-	struct txn_req_get_tree *get_tree;
+	struct mgmt_get_req *get_req;
 	struct lyd_node *tree = NULL;
 	LY_ERR err;
 
@@ -2205,7 +2134,7 @@ int mgmt_txn_notify_get_data_reply(uint64_t txn_id, uint64_t req_id,
 	}
 
 	/* Find the request. */
-	FOREACH_TXN_REQ_IN_LIST (&txn->get_tree_reqs, txn_req)
+	FOREACH_TXN_REQ_IN_LIST (&txn->get_reqs, txn_req)
 		if (txn_req->req_id == req_id)
 			break;
 	if (!txn_req) {
@@ -2215,12 +2144,10 @@ int mgmt_txn_notify_get_data_reply(uint64_t txn_id, uint64_t req_id,
 		return -1;
 	}
 
-	get_tree = txn_req->req.get_tree;
+	get_req = txn_req->req.get;
 
-	if (!success) {
-		err = LY_EOTHER;
+	if (!success)
 		goto err;
-	}
 
 	/* store the result */
 	err = lyd_parse_data_mem(ly_native_ctx, data,
@@ -2233,29 +2160,31 @@ int mgmt_txn_notify_get_data_reply(uint64_t txn_id, uint64_t req_id,
 			      " error parsing result of type %u",
 			      adapter->name, txn_id, req_id,
 			      format);
+		error = ly_strerrcode(err);
 	}
 	if (!err) {
 		/* TODO: we could merge ly_errs here if it's not binary */
 
-		if (!get_tree->client_results)
-			get_tree->client_results = tree;
+		if (!get_req->result)
+			get_req->result = tree;
 		else
-			err = lyd_merge_siblings(&get_tree->client_results,
+			err = lyd_merge_siblings(&get_req->result,
 						 tree, LYD_MERGE_DESTRUCT);
 		if (err) {
 			MGMTD_TXN_ERR("GET reply from %s for txn-id %" PRIu64
 				      " req_id %" PRIu64 " error merging result",
 				      adapter->name, txn_id, req_id);
+			error = ly_strerrcode(err);
 		}
 	}
 err:
-	if (!get_tree->partial_error)
-		get_tree->partial_error = err;
+	if (!get_req->error)
+		get_req->error = error;
 
-	get_tree->recv_clients |= (1u << id);
+	get_req->recv_clients |= (1u << id);
 
 	/* check if done yet */
-	if (get_tree->recv_clients != get_tree->sent_clients)
+	if (get_req->recv_clients != get_req->sent_clients)
 		return 0;
 
 	return txn_get_tree_data_done(txn, txn_req);

@@ -103,32 +103,13 @@ struct mgmt_fe_client_cbs {
 				     Mgmtd__DatastoreId dst_ds_id,
 				     bool validate_only, char *errmsg_if_any);
 
-	int (*get_data_notify)(struct mgmt_fe_client *client,
-			       uintptr_t user_data, uint64_t client_id,
-			       uintptr_t session_id,
-			       uintptr_t user_session_client, uint64_t req_id,
-			       bool success, Mgmtd__DatastoreId ds_id,
-			       Mgmtd__YangDataFormat format, char *data,
-			       char *errmsg_if_any);
-
-	int (*data_notify)(uint64_t client_id, uint64_t session_id,
-			   uintptr_t user_data, uint64_t req_id,
-			   Mgmtd__DatastoreId ds_id,
-			   Mgmtd__YangData **yang_data, size_t num_data);
-
-	/* Called when get-tree result is returned */
-	int (*get_tree_notify)(struct mgmt_fe_client *client,
-			       uintptr_t user_data, uint64_t client_id,
-			       uint64_t session_id, uintptr_t session_ctx,
-			       uint64_t req_id, Mgmtd__DatastoreId ds_id,
-			       LYD_FORMAT result_type, void *result, size_t len,
-			       int partial_error);
-
-	/* Called when new native error is returned */
-	int (*error_notify)(struct mgmt_fe_client *client, uintptr_t user_data,
-			    uint64_t client_id, uint64_t session_id,
-			    uintptr_t session_ctx, uint64_t req_id, int error,
-			    const char *errstr);
+	int (*get_notify)(struct mgmt_fe_client *client,
+			  uintptr_t user_data, uint64_t client_id,
+			  uintptr_t session_id,
+			  uintptr_t user_session_client, uint64_t req_id,
+			  bool success, Mgmtd__DatastoreId ds_id,
+			  Mgmtd__YangDataFormat format, char *data,
+			  char *errmsg_if_any);
 };
 
 extern struct debug mgmt_dbg_fe_client;
@@ -339,7 +320,8 @@ extern int mgmt_fe_send_commitcfg_req(struct mgmt_fe_client *client,
  */
 extern int mgmt_fe_send_get_req(struct mgmt_fe_client *client,
 				uint64_t session_id, uint64_t req_id,
-				bool is_config, Mgmtd__DatastoreId ds_id,
+				bool has_config, bool config,
+				Mgmtd__DatastoreId ds_id,
 				Mgmtd__YangDataFormat format, const char *xpath);
 
 
@@ -376,31 +358,6 @@ extern int mgmt_fe_send_regnotify_req(struct mgmt_fe_client *client,
 				      bool register_req,
 				      Mgmtd__YangDataXPath **data_req,
 				      int num_reqs);
-
-/*
- * Send GET-TREE to MGMTD daemon.
- *
- * client
- *    Client object.
- *
- * session_id
- *    Client session ID.
- *
- * req_id
- *    Client request ID.
- *
- * result_type
- *    The LYD_FORMAT of the result.
- *
- * xpath
- *    the xpath to get.
- *
- * Returns:
- *    0 on success, otherwise msg_conn_send_msg() return values.
- */
-extern int mgmt_fe_send_get_tree_req(struct mgmt_fe_client *client,
-				     uint64_t session_id, uint64_t req_id,
-				     LYD_FORMAT result_type, const char *xpath);
 
 /*
  * Destroy library and cleanup everything.

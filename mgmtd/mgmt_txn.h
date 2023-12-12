@@ -77,12 +77,6 @@ extern void mgmt_txn_destroy(void);
  */
 extern uint64_t mgmt_config_txn_in_progress(void);
 
-/**
- * Get the session ID associated with the given ``txn-id``.
- *
- */
-extern uint64_t mgmt_txn_get_session_id(uint64_t txn_id);
-
 /*
  * Create transaction.
  *
@@ -182,33 +176,14 @@ extern int mgmt_txn_send_commit_config_req(uint64_t txn_id, uint64_t req_id,
 					   bool implicit);
 
 /*
- * Send get-{cfg,data} request to be processed later in transaction.
- *
- * Is get-config if cfg_root is provided and the config is gathered locally,
- * otherwise it's get-data and data is fetched from backedn clients.
+ * Send get request to be processed later in transaction.
  */
 extern int mgmt_txn_send_get_req(uint64_t txn_id, uint64_t req_id,
 				 Mgmtd__DatastoreId ds_id,
-				 struct nb_config *cfg_root,
+				 struct mgmt_ds_ctx *ds_ctx,
+				 bool config, bool state, uint64_t clients,
 				 Mgmtd__YangDataFormat format,
 				 const char *xpath);
-
-
-/**
- * Send get-tree to the backend `clients`.
- *
- * Args:
- *	txn_id: Transaction identifier.
- *	req_id: FE client request identifier.
- *	clients: Bitmask of clients to send get-tree to.
- *	result_type: LYD_FORMAT result format.
- *	xpath: The xpath to get the tree from.
- * Return:
- *	0 on success.
- */
-extern int mgmt_txn_send_get_tree_oper(uint64_t txn_id, uint64_t req_id,
-				       uint64_t clients, LYD_FORMAT result_type,
-				       const char *xpath);
 
 /*
  * Notifiy backend adapter on connection.

@@ -250,7 +250,13 @@ message FeCommitConfigReply {
 
 message FeGetReq {
   required uint64 session_id = 1;
-  required bool config = 2;
+  /*
+   * As in NETCONF/RESTCONF:
+   * - no "config" field means all nodes
+   * - "config == true" means only "config true" nodes
+   * - "config == false" means only "config false" nodes
+   */
+  optional bool config = 2;
   required DatastoreId ds_id = 3;
   required uint64 req_id = 4;
   required YangDataFormat format = 5;
