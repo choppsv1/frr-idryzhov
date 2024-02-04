@@ -103,7 +103,9 @@ struct pim_router {
 
 /* Per VRF PIM DB */
 struct pim_instance {
-	// vrf_id_t vrf_id;
+	RB_ENTRY(pim_instance) entry;
+
+	char name[VRF_NAMSIZ + 1];
 	struct vrf *vrf;
 
 	struct {
@@ -189,6 +191,10 @@ struct pim_instance {
 
 	uint64_t gm_rx_drop_sys;
 };
+RB_HEAD(pim_name_head, pim_instance);
+RB_PROTOTYPE(pim_name_head, pim_instance, entry, pim_name_compare)
+
+extern struct pim_name_head pim_instances;
 
 void pim_vrf_init(void);
 void pim_vrf_terminate(void);
@@ -196,5 +202,8 @@ void pim_vrf_terminate(void);
 extern struct pim_router *router;
 
 struct pim_instance *pim_get_pim_instance(vrf_id_t vrf_id);
+
+struct pim_instance *pim_instance_init(const char *name);
+void pim_instance_terminate(struct pim_instance *pim);
 
 #endif

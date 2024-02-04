@@ -40,6 +40,7 @@ static void pim_msdp_peer_hold_timer_setup(struct pim_msdp_peer *mp,
 					   bool start);
 static void pim_msdp_peer_free(struct pim_msdp_peer *mp);
 static void pim_msdp_enable(struct pim_instance *pim);
+static void pim_msdp_disable(struct pim_instance *pim);
 static void pim_msdp_sa_adv_timer_setup(struct pim_instance *pim, bool start);
 static void pim_msdp_sa_deref(struct pim_msdp_sa *sa,
 			      enum pim_msdp_sa_flags flags);
@@ -1021,6 +1022,32 @@ static void pim_msdp_addr2su(union sockunion *su, struct in_addr addr)
 #endif /* HAVE_STRUCT_SOCKADDR_IN_SIN_LEN */
 }
 
+void pim_msdp_peer_start(struct pim_msdp_peer *mp)
+{
+	if (PIM_DEBUG_MSDP_EVENTS) {
+		zlog_debug("MSDP peer %s start", mp->key_str);
+	}
+
+	pim_msdp_enable(mp->pim);
+
+	if (PIM_MSDP_PEER_IS_LISTENER(mp)) {
+		pim_msdp_peer_listen(mp);
+	} else {
+		pim_msdp_peer_connect(mp);
+	}
+}
+
+void pim_msdp_peer_stop(struct pim_msdp_peer *mp)
+{
+	if (PIM_DEBUG_MSDP_EVENTS) {
+		zlog_debug("MSDP peer %s stop", mp->key_str);
+	}
+
+	pim_msdp_peer_stop_tcp_conn(mp, true /* chg_state */);
+
+	pim_msdp_disable(mp->pim);
+}
+
 /* 11.2.A1: create a new peer and transition state to listen or connecting */
 struct pim_msdp_peer *pim_msdp_peer_add(struct pim_instance *pim,
 					const struct in_addr *peer,
@@ -1028,8 +1055,6 @@ struct pim_msdp_peer *pim_msdp_peer_add(struct pim_instance *pim,
 					const char *mesh_group_name)
 {
 	struct pim_msdp_peer *mp;
-
-	pim_msdp_enable(pim);
 
 	mp = XCALLOC(MTYPE_PIM_MSDP_PEER, sizeof(*mp));
 
@@ -1067,12 +1092,9 @@ struct pim_msdp_peer *pim_msdp_peer_add(struct pim_instance *pim,
 		pim_msdp_peer_state_chg_log(mp);
 	}
 
-	/* fireup the connect state machine */
-	if (PIM_MSDP_PEER_IS_LISTENER(mp)) {
-		pim_msdp_peer_listen(mp);
-	} else {
-		pim_msdp_peer_connect(mp);
-	}
+	if (pim->vrf && pim->vrf->vrf_id != VRF_UNKNOWN)
+		pim_msdp_peer_start(mp);
+
 	return mp;
 }
 
@@ -1111,11 +1133,14 @@ static void pim_msdp_peer_free(struct pim_msdp_peer *mp)
 /* delete the peer config */
 void pim_msdp_peer_del(struct pim_msdp_peer **mp)
 {
+	struct pim_instance *pim;
+
 	if (*mp == NULL)
 		return;
 
-	/* stop the tcp connection and shutdown all timers */
-	pim_msdp_peer_stop_tcp_conn(*mp, true /* chg_state */);
+	pim = (*mp)->pim;
+	if (pim->vrf && pim->vrf->vrf_id != VRF_UNKNOWN)
+		pim_msdp_peer_stop(*mp);
 
 	/* remove the session from various tables */
 	listnode_delete((*mp)->pim->msdp.peer_list, *mp);
@@ -1133,9 +1158,12 @@ void pim_msdp_peer_del(struct pim_msdp_peer **mp)
 void pim_msdp_peer_change_source(struct pim_msdp_peer *mp,
 				 const struct in_addr *addr)
 {
-	pim_msdp_peer_stop_tcp_conn(mp, true);
-
 	mp->local = *addr;
+
+	if (!mp->pim->vrf || mp->pim->vrf->vrf_id == VRF_UNKNOWN)
+		return;
+
+	pim_msdp_peer_stop_tcp_conn(mp, true);
 
 	if (PIM_MSDP_PEER_IS_LISTENER(mp))
 		pim_msdp_peer_listen(mp);
@@ -1330,7 +1358,8 @@ bool pim_msdp_peer_config_write(struct vty *vty, struct pim_instance *pim,
 /* Enable feature including active/periodic timers etc. on the first peer
  * config. Till then MSDP should just stay quiet. */
 static void pim_msdp_enable(struct pim_instance *pim)
-{
+{	
+	pim->msdp.active_peers++;
 	if (pim->msdp.flags & PIM_MSDPF_ENABLE) {
 		/* feature is already enabled */
 		return;
@@ -1342,6 +1371,15 @@ static void pim_msdp_enable(struct pim_instance *pim)
 	pim_msdp_sa_local_setup(pim);
 }
 
+static void pim_msdp_disable(struct pim_instance *pim)
+{
+	pim->msdp.active_peers--;
+	if (pim->msdp.active_peers > 0)
+		return;
+	pim_msdp_sa_adv_timer_setup(pim, false /* stop */);
+	pim->msdp.flags &= ~PIM_MSDPF_ENABLE;
+}
+
 /* MSDP init */
 void pim_msdp_init(struct pim_instance *pim, struct event_loop *master)
 {
@@ -1349,7 +1387,7 @@ void pim_msdp_init(struct pim_instance *pim, struct event_loop *master)
 	char hash_name[64];
 
 	snprintf(hash_name, sizeof(hash_name), "PIM %s MSDP Peer Hash",
-		 pim->vrf->name);
+		 pim->name);
 	pim->msdp.peer_hash = hash_create(pim_msdp_peer_hash_key_make,
 					  pim_msdp_peer_hash_eq, hash_name);
 	pim->msdp.peer_list = list_new();
@@ -1357,20 +1395,20 @@ void pim_msdp_init(struct pim_instance *pim, struct event_loop *master)
 	pim->msdp.peer_list->cmp = (int (*)(void *, void *))pim_msdp_peer_comp;
 
 	snprintf(hash_name, sizeof(hash_name), "PIM %s MSDP SA Hash",
-		 pim->vrf->name);
+		 pim->name);
 	pim->msdp.sa_hash = hash_create(pim_msdp_sa_hash_key_make,
 					pim_msdp_sa_hash_eq, hash_name);
 	pim->msdp.sa_list = list_new();
 	pim->msdp.sa_list->del = (void (*)(void *))pim_msdp_sa_free;
 	pim->msdp.sa_list->cmp = (int (*)(void *, void *))pim_msdp_sa_comp;
+
+	pim->msdp.active_peers = 0;
 }
 
 /* counterpart to MSDP init; XXX: unused currently */
 void pim_msdp_exit(struct pim_instance *pim)
 {
 	struct pim_msdp_mg *mg;
-
-	pim_msdp_sa_adv_timer_setup(pim, false);
 
 	/* Stop listener and delete all peer sessions */
 	while ((mg = SLIST_FIRST(&pim->msdp.mglist)) != NULL)
@@ -1399,11 +1437,11 @@ void pim_msdp_mg_src_add(struct pim_instance *pim, struct pim_msdp_mg *mg,
 	struct pim_msdp_mg_mbr *mbr;
 	struct listnode *mbr_node;
 
-	/* Stop all connections and remove data structures. */
-	pim_msdp_src_del(mg);
-
 	/* Set new address. */
 	mg->src_ip = *ai;
+
+	/* Stop all connections and remove data structures. */
+	pim_msdp_src_del(mg);
 
 	/* No new address, disable everyone. */
 	if (ai->s_addr == INADDR_ANY) {

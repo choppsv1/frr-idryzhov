@@ -25,7 +25,12 @@ struct ssmpingd_sock {
 
 void pim_ssmpingd_init(struct pim_instance *pim);
 void pim_ssmpingd_destroy(struct pim_instance *pim);
-int pim_ssmpingd_start(struct pim_instance *pim, pim_addr source_addr);
-int pim_ssmpingd_stop(struct pim_instance *pim, pim_addr source_addr);
+
+struct ssmpingd_sock *ssmpingd_new(struct pim_instance *pim,
+					  pim_addr source_addr);
+void ssmpingd_delete(struct ssmpingd_sock *ss);
+
+void pim_ssmpingd_start(struct ssmpingd_sock *ss);
+void pim_ssmpingd_stop(struct ssmpingd_sock *ss);
 
 #endif /* PIM_SSMPINGD_H */

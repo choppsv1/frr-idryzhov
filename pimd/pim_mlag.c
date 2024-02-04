@@ -986,16 +986,13 @@ void pim_mlag_deregister(void)
 
 void pim_if_configure_mlag_dualactive(struct pim_interface *pim_ifp)
 {
-	if (!pim_ifp || !pim_ifp->pim || pim_ifp->activeactive == true)
-		return;
+	assert(pim_ifp->pim);
 
 	if (PIM_DEBUG_MLAG)
 		zlog_debug("%s: Configuring active-active on Interface: %s",
 			   __func__, "NULL");
 
-	pim_ifp->activeactive = true;
-	if (pim_ifp->pim)
-		pim_ifp->pim->inst_mlag_intf_cnt++;
+	pim_ifp->pim->inst_mlag_intf_cnt++;
 
 	router->pim_mlag_intf_cnt++;
 	if (PIM_DEBUG_MLAG)
@@ -1015,14 +1012,12 @@ void pim_if_configure_mlag_dualactive(struct pim_interface *pim_ifp)
 
 void pim_if_unconfigure_mlag_dualactive(struct pim_interface *pim_ifp)
 {
-	if (!pim_ifp || !pim_ifp->pim || pim_ifp->activeactive == false)
-		return;
+	assert(pim_ifp->pim);
 
 	if (PIM_DEBUG_MLAG)
 		zlog_debug("%s: UnConfiguring active-active on Interface: %s",
 			   __func__, "NULL");
 
-	pim_ifp->activeactive = false;
 	pim_ifp->pim->inst_mlag_intf_cnt--;
 
 	router->pim_mlag_intf_cnt--;
@@ -1042,7 +1037,6 @@ void pim_if_unconfigure_mlag_dualactive(struct pim_interface *pim_ifp)
 	}
 }
 
-
 void pim_instance_mlag_init(struct pim_instance *pim)
 {
 	if (!pim)
@@ -1054,19 +1048,9 @@ void pim_instance_mlag_init(struct pim_instance *pim)
 
 void pim_instance_mlag_terminate(struct pim_instance *pim)
 {
-	struct interface *ifp;
-
 	if (!pim)
 		return;
 
-	FOR_ALL_INTERFACES (pim->vrf, ifp) {
-		struct pim_interface *pim_ifp = ifp->info;
-
-		if (!pim_ifp || pim_ifp->activeactive == false)
-			continue;
-
-		pim_if_unconfigure_mlag_dualactive(pim_ifp);
-	}
 	pim->inst_mlag_intf_cnt = 0;
 }
 

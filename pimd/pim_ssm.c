@@ -84,35 +84,19 @@ int pim_is_grp_ssm(struct pim_instance *pim, pim_addr group_addr)
 		PREFIX_PERMIT);
 }
 
-int pim_ssm_range_set(struct pim_instance *pim, vrf_id_t vrf_id,
-		      const char *plist_name)
+void pim_ssm_range_set(struct pim_instance *pim, const char *plist_name)
 {
 	struct pim_ssm *ssm;
-	int change = 0;
-
-	if (vrf_id != pim->vrf->vrf_id)
-		return PIM_SSM_ERR_NO_VRF;
 
 	ssm = pim->ssm_info;
-	if (plist_name) {
-		if (ssm->plist_name) {
-			if (!strcmp(ssm->plist_name, plist_name))
-				return PIM_SSM_ERR_DUP;
-			XFREE(MTYPE_PIM_FILTER_NAME, ssm->plist_name);
-		}
+
+	if (ssm->plist_name)
+		XFREE(MTYPE_PIM_FILTER_NAME, ssm->plist_name);
+	if (plist_name)
 		ssm->plist_name = XSTRDUP(MTYPE_PIM_FILTER_NAME, plist_name);
-		change = 1;
-	} else {
-		if (ssm->plist_name) {
-			change = 1;
-			XFREE(MTYPE_PIM_FILTER_NAME, ssm->plist_name);
-		}
-	}
 
-	if (change)
+	if (pim->vrf && pim->vrf->vrf_id != VRF_UNKNOWN)
 		pim_ssm_range_reevaluate(pim);
-
-	return PIM_SSM_ERR_NONE;
 }
 
 void *pim_ssm_init(void)

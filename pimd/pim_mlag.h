@@ -45,6 +45,14 @@ static inline void pim_mlag_terminate(void)
 {
 }
 
+static inline void pim_instance_mlag_start(struct pim_instance *pim)
+{
+}
+
+static inline void pim_instance_mlag_stop(struct pim_instance *pim)
+{
+}
+
 static inline void pim_instance_mlag_init(struct pim_instance *pim)
 {
 }

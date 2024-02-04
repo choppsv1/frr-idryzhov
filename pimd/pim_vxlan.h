@@ -128,7 +128,7 @@ extern void pim_vxlan_add_vif(struct interface *ifp);
 extern void pim_vxlan_del_vif(struct interface *ifp);
 extern void pim_vxlan_add_term_dev(struct pim_instance *pim,
 		struct interface *ifp);
-extern void pim_vxlan_del_term_dev(struct pim_instance *pim);
+extern void pim_vxlan_del_term_dev(struct pim_instance *pim, struct interface *ifp);
 extern bool pim_vxlan_get_register_src(struct pim_instance *pim,
 		struct pim_upstream *up, struct in_addr *src_p);
 extern void pim_vxlan_mlag_update(bool enable, bool peer_state, uint32_t role,

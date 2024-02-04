@@ -173,8 +173,9 @@ int pim_global_config_write_worker(struct pim_instance *pim, struct vty *vty)
 	int writes = 0;
 	struct pim_ssm *ssm = pim->ssm_info;
 	char spaces[10];
+	bool is_default = strmatch(pim->name, VRF_DEFAULT_NAME);
 
-	if (pim->vrf->vrf_id == VRF_DEFAULT)
+	if (is_default)
 		snprintf(spaces, sizeof(spaces), "%s", "");
 	else
 		snprintf(spaces, sizeof(spaces), "%s", " ");
@@ -189,7 +190,7 @@ int pim_global_config_write_worker(struct pim_instance *pim, struct vty *vty)
 
 	writes += pim_rp_config_write(pim, vty, spaces);
 
-	if (pim->vrf->vrf_id == VRF_DEFAULT) {
+	if (is_default) {
 		if (router->register_suppress_time
 		    != PIM_REGISTER_SUPPRESSION_TIME_DEFAULT) {
 			vty_out(vty, "%s" PIM_AF_NAME " pim register-suppress-time %d\n",
@@ -469,15 +470,13 @@ int pim_interface_config_write(struct vty *vty)
 
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
 		pim = vrf->info;
-		if (!pim)
-			continue;
 
-		FOR_ALL_INTERFACES (pim->vrf, ifp) {
+		FOR_ALL_INTERFACES (vrf, ifp) {
 			/* pim is enabled internally/implicitly on the vxlan
 			 * termination device ipmr-lo. skip displaying that
 			 * config to avoid confusion
 			 */
-			if (pim_vxlan_is_term_dev_cfg(pim, ifp))
+			if (pim && pim_vxlan_is_term_dev_cfg(pim, ifp))
 				continue;
 
 			/* IF name */

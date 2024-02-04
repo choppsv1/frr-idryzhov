@@ -11,7 +11,11 @@ extern const struct frr_yang_module_info frr_pim_info;
 extern const struct frr_yang_module_info frr_pim_rp_info;
 extern const struct frr_yang_module_info frr_gmp_info;
 
+void pim_if_membership_refresh(struct interface *ifp);
+
 /* frr-pim prototypes*/
+int routing_control_plane_protocols_pim_create(struct nb_cb_create_args *args);
+int routing_control_plane_protocols_pim_destroy(struct nb_cb_destroy_args *args);
 int routing_control_plane_protocols_control_plane_protocol_pim_address_family_ecmp_modify(
 	struct nb_cb_modify_args *args);
 int routing_control_plane_protocols_control_plane_protocol_pim_address_family_ecmp_rebalance_modify(

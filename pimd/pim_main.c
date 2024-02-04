@@ -133,7 +133,8 @@ int main(int argc, char **argv, char **envp)
 	hook_register(routing_conf_event,
 		      routing_control_plane_protocols_name_validate);
 
-	routing_control_plane_protocols_register_vrf_dependency();
+	hook_register(routing_create, routing_control_plane_protocols_pim_create);
+	hook_register(routing_destroy, routing_control_plane_protocols_pim_destroy);
 
 	frr_config_fork();
 

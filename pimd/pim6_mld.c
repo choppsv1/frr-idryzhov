@@ -2944,6 +2944,9 @@ static void gm_show_groups(struct vty *vty, struct vrf *vrf, bool uj)
 	json_object *json_groups = NULL;
 	struct pim_instance *pim = vrf->info;
 
+	if (!pim)
+		return;
+
 	if (uj) {
 		json = json_object_new_object();
 		json_object_int_add(json, "totalGroups", pim->gm_group_count);

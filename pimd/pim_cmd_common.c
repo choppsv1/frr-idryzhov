@@ -1784,6 +1784,9 @@ int pim_show_join_vrf_all_cmd_helper(struct vty *vty, const char *json)
 		json_parent = json_object_new_object();
 
 	RB_FOREACH (vrf_struct, vrf_name_head, &vrfs_by_name) {
+		if (!vrf_struct->info)
+			continue;
+
 		if (!json_parent)
 			vty_out(vty, "VRF: %s\n", vrf_struct->name);
 		else
@@ -1929,7 +1932,7 @@ int pim_show_membership_cmd_helper(const char *vrf, struct vty *vty, bool uj)
 
 	v = vrf_lookup_by_name(vrf ? vrf : VRF_DEFAULT_NAME);
 
-	if (!v)
+	if (!v || !v->info)
 		return CMD_WARNING;
 
 	pim_show_membership(v->info, vty, uj);
@@ -2178,7 +2181,7 @@ int pim_show_channel_cmd_helper(const char *vrf, struct vty *vty, bool uj)
 
 	v = vrf_lookup_by_name(vrf ? vrf : VRF_DEFAULT_NAME);
 
-	if (!v)
+	if (!v || !v->info)
 		return CMD_WARNING;
 
 	pim_show_channel(v->info, vty, uj);
@@ -2194,7 +2197,7 @@ int pim_show_interface_cmd_helper(const char *vrf, struct vty *vty, bool uj,
 
 	v = vrf_lookup_by_name(vrf ? vrf : VRF_DEFAULT_NAME);
 
-	if (!v)
+	if (!v || !v->info)
 		return CMD_WARNING;
 
 	if (uj)
@@ -2223,6 +2226,9 @@ int pim_show_interface_vrf_all_cmd_helper(struct vty *vty, bool uj, bool mlag,
 		json_parent = json_object_new_object();
 
 	RB_FOREACH (v, vrf_name_head, &vrfs_by_name) {
+		if (!v->info)
+			continue;
+
 		if (!uj)
 			vty_out(vty, "VRF: %s\n", v->name);
 		else
@@ -2893,7 +2899,7 @@ int pim_show_nexthop_lookup_cmd_helper(const char *vrf, struct vty *vty,
 
 	v = vrf_lookup_by_name(vrf ? vrf : VRF_DEFAULT_NAME);
 
-	if (!v)
+	if (!v || !v->info)
 		return CMD_WARNING;
 
 #if PIM_IPV == 4
@@ -2937,7 +2943,7 @@ int pim_show_nexthop_cmd_helper(const char *vrf, struct vty *vty, bool uj)
 
 	v = vrf_lookup_by_name(vrf ? vrf : VRF_DEFAULT_NAME);
 
-	if (!v)
+	if (!v || !v->info)
 		return CMD_WARNING;
 
 	pim_show_nexthop(v->info, vty, uj);
@@ -2977,7 +2983,7 @@ int pim_show_neighbors_cmd_helper(const char *vrf, struct vty *vty,
 
 	v = vrf_lookup_by_name(vrf ? vrf : VRF_DEFAULT_NAME);
 
-	if (!v)
+	if (!v || !v->info)
 		return CMD_WARNING;
 
 	if (json)
@@ -3004,6 +3010,9 @@ int pim_show_neighbors_vrf_all_cmd_helper(struct vty *vty, const char *json,
 	if (json)
 		json_parent = json_object_new_object();
 	RB_FOREACH (v, vrf_name_head, &vrfs_by_name) {
+		if (!v->info)
+			continue;
+
 		if (!json)
 			vty_out(vty, "VRF: %s\n", v->name);
 		else
@@ -3610,8 +3619,6 @@ void pim_cmd_show_ip_multicast_helper(struct pim_instance *pim, struct vty *vty)
 	char uptime[10];
 	char mlag_role[80];
 
-	pim = vrf->info;
-
 	vty_out(vty, "Router MLAG Role: %s\n",
 		mlag_role2str(router->mlag_role, mlag_role, sizeof(mlag_role)));
 	vty_out(vty, "Mroute socket descriptor:");
@@ -4214,7 +4221,7 @@ int clear_ip_mroute_count_command(struct vty *vty, const char *name)
 	struct vrf *v = pim_cmd_lookup(vty, name);
 	struct pim_instance *pim;
 
-	if (!v)
+	if (!v || !v->info)
 		return CMD_WARNING;
 
 	pim = v->info;
@@ -4252,6 +4259,11 @@ struct vrf *pim_cmd_lookup(struct vty *vty, const char *name)
 
 	if (!vrf)
 		vty_out(vty, "Specified VRF: %s does not exist\n", name);
+	
+	if (!vrf->info) {
+		vty_out(vty, "PIM is not configured in VRF: %s\n", name);
+		vrf = NULL;
+	}
 
 	return vrf;
 }
@@ -4466,6 +4478,8 @@ int pim_show_rpf_vrf_all_helper(struct vty *vty, bool json)
 		json_parent = json_object_new_object();
 
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		if (!vrf->info)
+			continue;
 		if (!json)
 			vty_out(vty, "VRF: %s\n", vrf->name);
 		else
@@ -4538,6 +4552,8 @@ int pim_show_rp_vrf_all_helper(struct vty *vty, const char *group_str,
 		json_parent = json_object_new_object();
 
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		if (!vrf->info)
+			continue;
 		if (!json)
 			vty_out(vty, "VRF: %s\n", vrf->name);
 		else
@@ -4654,6 +4670,8 @@ int pim_show_upstream_vrf_all_helper(struct vty *vty, bool json)
 		json_parent = json_object_new_object();
 
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		if (!vrf->info)
+			continue;
 		if (!json)
 			vty_out(vty, "VRF: %s\n", vrf->name);
 		else
@@ -4756,6 +4774,9 @@ int pim_show_state_vrf_all_helper(struct vty *vty, const char *s_or_g_str,
 		json_parent = json_object_new_object();
 
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		if (!vrf->info)
+			continue;
+
 		if (!json)
 			vty_out(vty, "VRF: %s\n", vrf->name);
 		else
@@ -4798,6 +4819,8 @@ int pim_show_multicast_vrf_all_helper(struct vty *vty)
 	struct vrf *vrf;
 
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		if (!vrf->info)
+			continue;
 		vty_out(vty, "VRF: %s\n", vrf->name);
 		pim_cmd_show_ip_multicast_helper(vrf->info, vty);
 	}
@@ -4844,6 +4867,8 @@ int pim_show_multicast_count_vrf_all_helper(struct vty *vty, bool json)
 		json_parent = json_object_new_object();
 
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		if (!vrf->info)
+			continue;
 		if (!json)
 			vty_out(vty, "VRF: %s\n", vrf->name);
 		else
@@ -4910,6 +4935,8 @@ int pim_show_mroute_vrf_all_helper(struct vty *vty, bool fill, bool json)
 		json_parent = json_object_new_object();
 
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		if (!vrf->info)
+			continue;
 		if (!json)
 			vty_out(vty, "VRF: %s\n", vrf->name);
 		else
@@ -4964,6 +4991,9 @@ int pim_show_mroute_count_vrf_all_helper(struct vty *vty, bool json)
 		json_parent = json_object_new_object();
 
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		if (!vrf->info)
+			continue;
+
 		if (!json)
 			vty_out(vty, "VRF: %s\n", vrf->name);
 		else
@@ -5020,6 +5050,9 @@ int pim_show_mroute_summary_vrf_all_helper(struct vty *vty, bool json)
 		json_parent = json_object_new_object();
 
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		if (!vrf->info)
+			continue;
+
 		if (!json)
 			vty_out(vty, "VRF: %s\n", vrf->name);
 		else

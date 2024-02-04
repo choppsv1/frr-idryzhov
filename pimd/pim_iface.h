@@ -187,9 +187,8 @@ struct pim_interface {
 void pim_if_init(struct pim_instance *pim);
 void pim_if_terminate(struct pim_instance *pim);
 
-struct pim_interface *pim_if_new(struct interface *ifp, bool igmp, bool pim,
-				 bool ispimreg, bool is_vxlan_term);
-void pim_if_delete(struct interface *ifp);
+void pim_if_start(struct interface *ifp);
+void pim_if_stop(struct interface *ifp);
 void pim_if_addr_add(struct connected *ifc);
 void pim_if_addr_del(struct connected *ifc, int force_prim_as_any);
 void pim_if_addr_add_all(struct interface *ifp);
@@ -234,16 +233,19 @@ void pim_if_update_join_desired(struct pim_interface *pim_ifp);
 void pim_if_update_assert_tracking_desired(struct interface *ifp);
 
 void pim_if_create_pimreg(struct pim_instance *pim);
+void pim_if_delete_pimreg(struct pim_instance *pim);
 
 struct prefix *pim_if_connected_to_source(struct interface *ifp, pim_addr src);
-int pim_update_source_set(struct interface *ifp, pim_addr source);
+void pim_update_source_set(struct interface *ifp, pim_addr source);
 
 bool pim_if_is_vrf_device(struct interface *ifp);
 
 int pim_if_ifchannel_count(struct pim_interface *pim_ifp);
 
 void pim_iface_init(void);
+void pim_pim_interface_add(struct interface *ifp);
 void pim_pim_interface_delete(struct interface *ifp);
+void pim_gm_interface_add(struct interface *ifp);
 void pim_gm_interface_delete(struct interface *ifp);
 
 #endif /* PIM_IFACE_H */

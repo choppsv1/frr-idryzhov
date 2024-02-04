@@ -1186,7 +1186,7 @@ void pim_vxlan_del_vif(struct interface *ifp)
 void pim_vxlan_add_term_dev(struct pim_instance *pim,
 		struct interface *ifp)
 {
-	struct pim_interface *pim_ifp;
+	struct pim_interface *pim_ifp = ifp->info;
 
 	if (pim->vxlan.term_if_cfg == ifp)
 		return;
@@ -1198,42 +1198,23 @@ void pim_vxlan_add_term_dev(struct pim_instance *pim,
 			   ifp->name);
 
 	pim->vxlan.term_if_cfg = ifp;
-
-	/* enable pim on the term ifp */
-	pim_ifp = (struct pim_interface *)ifp->info;
-	if (pim_ifp) {
-		pim_ifp->pim_enable = true;
-		/* ifp is already oper up; activate it as a term dev */
-		if (pim_ifp->mroute_vif_index >= 0)
-			pim_vxlan_term_oif_update(pim, ifp);
-	} else {
-		/* ensure that pimreg exists before using the newly created
-		 * vxlan termination device
-		 */
-		pim_if_create_pimreg(pim);
-		(void)pim_if_new(ifp, false /*igmp*/, true /*pim*/,
-				 false /*pimreg*/, true /*vxlan_term*/);
-	}
+	pim_ifp->pim_enable = true;
 }
 
 /* disable pim implicitly, if needed, on the termination device deletion */
-void pim_vxlan_del_term_dev(struct pim_instance *pim)
+void pim_vxlan_del_term_dev(struct pim_instance *pim, struct interface *ifp)
 {
-	struct interface *ifp = pim->vxlan.term_if_cfg;
-	struct pim_interface *pim_ifp;
+	struct pim_interface *pim_ifp = ifp->info;
+
+	if (pim->vxlan.term_if_cfg != ifp)
+		return;
 
 	if (PIM_DEBUG_VXLAN)
 		zlog_debug("vxlan term oif cfg changed from %s to -",
 				ifp->name);
 
 	pim->vxlan.term_if_cfg = NULL;
-
-	pim_ifp = (struct pim_interface *)ifp->info;
-	if (pim_ifp) {
-		pim_ifp->pim_enable = false;
-		if (!pim_ifp->gm_enable)
-			pim_if_delete(ifp);
-	}
+	pim_ifp->pim_enable = false;
 }
 
 void pim_vxlan_init(struct pim_instance *pim)
@@ -1241,7 +1222,7 @@ void pim_vxlan_init(struct pim_instance *pim)
 	char hash_name[64];
 
 	snprintf(hash_name, sizeof(hash_name),
-		"PIM %s vxlan SG hash", pim->vrf->name);
+		"PIM %s vxlan SG hash", pim->name);
 	pim->vxlan.sg_hash = hash_create(pim_vxlan_sg_hash_key_make,
 			pim_vxlan_sg_hash_eq, hash_name);
 }

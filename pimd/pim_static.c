@@ -250,7 +250,7 @@ int pim_static_write_mroute(struct pim_instance *pim, struct vty *vty,
 	struct static_route *sroute;
 	int count = 0;
 
-	if (!pim_ifp)
+	if (!pim || !pim_ifp)
 		return 0;
 
 	for (ALL_LIST_ELEMENTS_RO(pim->static_routes, node, sroute)) {

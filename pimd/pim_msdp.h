@@ -179,6 +179,7 @@ struct pim_msdp {
 	/* MSDP peer info */
 	struct hash *peer_hash;
 	struct list *peer_list;
+	int active_peers;
 
 /* MSDP active-source info */
 #define PIM_MSDP_SA_ADVERTISMENT_TIME 60
@@ -278,9 +279,9 @@ struct pim_msdp_mg_mbr *pim_msdp_mg_mbr_add(struct pim_instance *pim,
 void pim_msdp_mg_mbr_del(struct pim_msdp_mg *mg, struct pim_msdp_mg_mbr *mbr);
 
 /**
- * Allocates MSDP peer data structure, adds peer to group name
- * `mesh_group_name` and starts state machine. If no group name is provided then
- * the peer will work standalone.
+ * Allocates MSDP peer data structure and adds peer to group name
+ * `mesh_group_name`. If no group name is provided then the peer will work
+ * standalone.
  *
  * \param pim PIM instance
  * \param peer_addr peer address
@@ -293,9 +294,19 @@ struct pim_msdp_peer *pim_msdp_peer_add(struct pim_instance *pim,
 					const char *mesh_group_name);
 
 /**
- * Stops peer state machine and free memory.
+ * Frees peer memory.
  */
 void pim_msdp_peer_del(struct pim_msdp_peer **mp);
+
+/**
+ * Starts peer state machine.
+ */
+void pim_msdp_peer_start(struct pim_msdp_peer *mp);
+
+/**
+ * Stops peer state machine.
+ */
+void pim_msdp_peer_stop(struct pim_msdp_peer *mp);
 
 /**
  * Changes peer source address.
@@ -313,6 +324,14 @@ static inline void pim_msdp_init(struct pim_instance *pim,
 }
 
 static inline void pim_msdp_exit(struct pim_instance *pim)
+{
+}
+
+static inline void pim_msdp_peer_start(struct pim_msdp_peer *mp)
+{
+}
+
+static inline void pim_msdp_peer_stop(struct pim_msdp_peer *mp)
 {
 }
 

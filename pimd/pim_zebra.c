@@ -97,7 +97,7 @@ static int pim_zebra_if_address_add(ZAPI_CALLBACK_ARGS)
 
 	if (PIM_DEBUG_ZEBRA) {
 		zlog_debug("%s: %s(%s) connected IP address %pFX flags %u %s",
-			   __func__, c->ifp->name, VRF_LOGNAME(pim_ifp->pim->vrf), p, c->flags,
+			   __func__, c->ifp->name, VRF_LOGNAME(c->ifp->vrf), p, c->flags,
 			   CHECK_FLAG(c->flags, ZEBRA_IFA_SECONDARY)
 				   ? "secondary"
 				   : "primary");
@@ -128,22 +128,16 @@ static int pim_zebra_if_address_add(ZAPI_CALLBACK_ARGS)
 		return 0;
 #endif
 
-	pim_if_addr_add(c);
-	if (pim_ifp) {
-		struct pim_instance *pim;
+	if (!pim_ifp->pim) {
+		if (PIM_DEBUG_ZEBRA)
+			zlog_debug("%s: Unable to find pim instance",
+					__func__);
 
-		pim = pim_get_pim_instance(vrf_id);
-		if (!pim) {
-			if (PIM_DEBUG_ZEBRA)
-				zlog_debug("%s: Unable to find pim instance",
-					   __func__);
-			return 0;
-		}
-
-		pim_ifp->pim = pim;
-
-		pim_rp_check_on_if_add(pim_ifp);
+		return 0;
 	}
+
+	pim_if_addr_add(c);
+	pim_rp_check_on_if_add(pim_ifp);
 
 	if (if_is_loopback(c->ifp)) {
 		struct vrf *vrf = vrf_lookup_by_id(vrf_id);
@@ -162,6 +156,7 @@ static int pim_zebra_if_address_del(ZAPI_CALLBACK_ARGS)
 	struct connected *c;
 	struct prefix *p;
 	struct vrf *vrf = vrf_lookup_by_id(vrf_id);
+	struct pim_instance *pim;
 
 	if (!vrf)
 		return 0;
@@ -192,10 +187,8 @@ static int pim_zebra_if_address_del(ZAPI_CALLBACK_ARGS)
 #endif
 	}
 
-	if (p->family == PIM_AF) {
-		struct pim_instance *pim;
-
-		pim = vrf->info;
+	pim = vrf->info;
+	if (p->family == PIM_AF && pim) {
 		pim_if_addr_del(c, 0);
 		pim_rp_setup(pim);
 		pim_i_am_rp_re_evaluate(pim);

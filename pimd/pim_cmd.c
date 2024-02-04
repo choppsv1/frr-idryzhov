@@ -84,6 +84,16 @@ static struct vrf *pim_cmd_lookup_vrf(struct vty *vty, struct cmd_token *argv[],
 				argv[*idx]->arg);
 	}
 
+	if (!vrf->info) {
+		if (uj)
+			vty_json_empty(vty, NULL);
+		else
+			vty_out(vty, "PIM is not configured in VRF %s\n",
+				argv[*idx]->arg);
+
+		vrf = NULL;
+	}
+
 	return vrf;
 }
 
@@ -1690,6 +1700,9 @@ DEFUN (show_ip_igmp_interface_vrf_all,
 	if (uj)
 		vty_out(vty, "{ ");
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		if (!vrf->info)
+			continue;
+
 		if (uj) {
 			if (!first)
 				vty_out(vty, ", ");
@@ -1749,6 +1762,8 @@ DEFUN (show_ip_igmp_join_vrf_all,
 	if (uj)
 		vty_out(vty, "{ ");
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		if (!vrf->info)
+			continue;
 		if (uj) {
 			if (!first)
 				vty_out(vty, ", ");
@@ -1811,6 +1826,8 @@ DEFPY(show_ip_igmp_groups_vrf_all,
 	if (uj)
 		vty_out(vty, "{ ");
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		if (!vrf->info)
+			continue;
 		if (uj) {
 			if (!first)
 				vty_out(vty, ", ");
@@ -2455,6 +2472,8 @@ DEFUN(show_ip_pim_mlag_up_vrf_all, show_ip_pim_mlag_up_vrf_all_cmd,
 
 	pim_show_mlag_help_string(vty, uj);
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		if (!vrf->info)
+			continue;
 		pim_show_mlag_up_vrf(vrf, vty, uj);
 	}
 
@@ -5425,13 +5444,16 @@ DEFUN (show_ip_msdp_mesh_group_vrf_all,
 		json = json_object_new_object();
 
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		pim = vrf->info;
+		if (!pim)
+			continue;
+
 		if (uj) {
 			vrf_json = json_object_new_object();
 			json_object_object_add(json, vrf->name, vrf_json);
 		} else
 			vty_out(vty, "VRF: %s\n", vrf->name);
 
-		pim = vrf->info;
 		SLIST_FOREACH (mg, &pim->msdp.mglist, mg_entry)
 			ip_msdp_show_mesh_group(vty, mg, vrf_json);
 	}
@@ -5653,6 +5675,8 @@ DEFUN (show_ip_msdp_peer_detail_vrf_all,
 	if (uj)
 		vty_out(vty, "{ ");
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		if (!vrf->info)
+			continue;
 		if (uj) {
 			if (!first)
 				vty_out(vty, ", ");
@@ -5881,6 +5905,8 @@ DEFUN (show_ip_msdp_sa_detail_vrf_all,
 	if (uj)
 		vty_out(vty, "{ ");
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		if (!vrf->info)
+			continue;
 		if (uj) {
 			if (!first)
 				vty_out(vty, ", ");
@@ -6015,6 +6041,9 @@ DEFUN (show_ip_msdp_sa_sg_vrf_all,
 	if (uj)
 		vty_out(vty, "{ ");
 	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		if (!vrf->info)
+			continue;
+
 		if (uj) {
 			if (!first)
 				vty_out(vty, ", ");

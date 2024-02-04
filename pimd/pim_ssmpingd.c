@@ -29,6 +29,7 @@ static const char *const PIM_SSMPINGD_REPLY_GROUP = "ff3e::4321:1234";
 enum { PIM_SSMPINGD_REQUEST = 'Q', PIM_SSMPINGD_REPLY = 'A' };
 
 static void ssmpingd_read_on(struct ssmpingd_sock *ss);
+static void ssmpingd_free(struct ssmpingd_sock *ss);
 
 void pim_ssmpingd_init(struct pim_instance *pim)
 {
@@ -40,28 +41,14 @@ void pim_ssmpingd_init(struct pim_instance *pim)
 			   &pim->ssmpingd_group_addr);
 
 	assert(result > 0);
+
+	pim->ssmpingd_list = list_new();
+	pim->ssmpingd_list->del = (void (*)(void *))ssmpingd_free;
 }
 
 void pim_ssmpingd_destroy(struct pim_instance *pim)
 {
-	if (pim->ssmpingd_list)
-		list_delete(&pim->ssmpingd_list);
-}
-
-static struct ssmpingd_sock *ssmpingd_find(struct pim_instance *pim,
-					   pim_addr source_addr)
-{
-	struct listnode *node;
-	struct ssmpingd_sock *ss;
-
-	if (!pim->ssmpingd_list)
-		return 0;
-
-	for (ALL_LIST_ELEMENTS_RO(pim->ssmpingd_list, node, ss))
-		if (!pim_addr_cmp(source_addr, ss->source_addr))
-			return ss;
-
-	return 0;
+	list_delete(&pim->ssmpingd_list);
 }
 
 static void ssmpingd_free(struct ssmpingd_sock *ss)
@@ -191,24 +178,6 @@ static int ssmpingd_socket(pim_addr addr, int port, int mttl)
 	return fd;
 }
 
-static void ssmpingd_delete(struct ssmpingd_sock *ss)
-{
-	assert(ss);
-
-	EVENT_OFF(ss->t_sock_read);
-
-	if (close(ss->sock_fd)) {
-		zlog_warn(
-			"%s: failure closing ssmpingd sock_fd=%d for source %pPA: errno=%d: %s",
-			__func__, ss->sock_fd, &ss->source_addr, errno,
-			safe_strerror(errno));
-		/* warning only */
-	}
-
-	listnode_delete(ss->pim->ssmpingd_list, ss);
-	ssmpingd_free(ss);
-}
-
 static void ssmpingd_sendto(struct ssmpingd_sock *ss, const uint8_t *buf,
 			    int len, struct sockaddr_storage to)
 {
@@ -303,29 +272,16 @@ static void ssmpingd_read_on(struct ssmpingd_sock *ss)
 		       &ss->t_sock_read);
 }
 
-static struct ssmpingd_sock *ssmpingd_new(struct pim_instance *pim,
+struct ssmpingd_sock *ssmpingd_new(struct pim_instance *pim,
 					  pim_addr source_addr)
 {
 	struct ssmpingd_sock *ss;
-	int sock_fd;
-
-	if (!pim->ssmpingd_list) {
-		pim->ssmpingd_list = list_new();
-		pim->ssmpingd_list->del = (void (*)(void *))ssmpingd_free;
-	}
-
-	sock_fd =
-		ssmpingd_socket(source_addr, /* port: */ 4321, /* mTTL: */ 64);
-	if (sock_fd < 0) {
-		zlog_warn("%s: ssmpingd_socket() failure for source %pPA",
-			  __func__, &source_addr);
-		return 0;
-	}
+	
 
 	ss = XCALLOC(MTYPE_PIM_SSMPINGD, sizeof(*ss));
 
 	ss->pim = pim;
-	ss->sock_fd = sock_fd;
+	ss->sock_fd = -1;
 	ss->t_sock_read = NULL;
 	ss->source_addr = source_addr;
 	ss->creation = pim_time_monotonic_sec();
@@ -333,49 +289,49 @@ static struct ssmpingd_sock *ssmpingd_new(struct pim_instance *pim,
 
 	listnode_add(pim->ssmpingd_list, ss);
 
-	ssmpingd_read_on(ss);
+	if (pim->vrf && pim->vrf->vrf_id != VRF_UNKNOWN)
+		pim_ssmpingd_start(ss);
 
 	return ss;
 }
 
-int pim_ssmpingd_start(struct pim_instance *pim, pim_addr source_addr)
+void ssmpingd_delete(struct ssmpingd_sock *ss)
 {
-	struct ssmpingd_sock *ss;
+	struct pim_instance *pim = ss->pim;
 
-	ss = ssmpingd_find(pim, source_addr);
-	if (ss) {
-		/* silently ignore request to recreate entry */
-		return 0;
-	}
+	if (pim->vrf && pim->vrf->vrf_id != VRF_UNKNOWN)
+		pim_ssmpingd_stop(ss);
 
-	zlog_info("%s: starting ssmpingd for source %pPAs", __func__,
-		  &source_addr);
-
-	ss = ssmpingd_new(pim, source_addr);
-	if (!ss) {
-		zlog_warn("%s: ssmpingd_new() failure for source %pPAs",
-			  __func__, &source_addr);
-		return -1;
-	}
-
-	return 0;
+	listnode_delete(pim->ssmpingd_list, ss);
+	ssmpingd_free(ss);
 }
 
-int pim_ssmpingd_stop(struct pim_instance *pim, pim_addr source_addr)
+void pim_ssmpingd_start(struct ssmpingd_sock *ss)
 {
-	struct ssmpingd_sock *ss;
+	zlog_info("%s: starting ssmpingd for source %pPAs", __func__,
+		  &ss->source_addr);
 
-	ss = ssmpingd_find(pim, source_addr);
-	if (!ss) {
-		zlog_warn("%s: could not find ssmpingd for source %pPAs",
-			  __func__, &source_addr);
-		return -1;
-	}
+	ss->sock_fd =
+		ssmpingd_socket(ss->source_addr, /* port: */ 4321, /* mTTL: */ 64);
+	if (ss->sock_fd < 0)
+		zlog_warn("%s: ssmpingd_socket() failure for source %pPA",
+			  __func__, &ss->source_addr);
+	else
+		ssmpingd_read_on(ss);
+}
 
+void pim_ssmpingd_stop(struct ssmpingd_sock *ss)
+{
 	zlog_info("%s: stopping ssmpingd for source %pPAs", __func__,
-		  &source_addr);
+		  &ss->source_addr);
 
-	ssmpingd_delete(ss);
+	if (ss->sock_fd > 0) {
+		EVENT_OFF(ss->t_sock_read);
 
-	return 0;
+		if (close(ss->sock_fd))
+			zlog_warn(
+			"%s: failure closing ssmpingd sock_fd=%d for source %pPA: errno=%d: %s",
+			__func__, ss->sock_fd, &ss->source_addr, errno,
+			safe_strerror(errno));
+	}
 }
